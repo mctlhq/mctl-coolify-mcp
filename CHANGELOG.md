@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-09-20
+
 ### Added
 
 - **Public landing page, terms of service, and privacy policy for HTTP mode.** Browser requests to `GET /` (`Accept: text/html`) serve an mctl-branded landing page with dark/light theming, capability overview, setup steps, and security transparency disclosures. New routes `GET /privacy` and `GET /terms` document data handling and operator access boundaries. Static assets in `public/` are served with caching, `X-Content-Type-Options: nosniff`, and path-traversal protection. `public/` is packaged into both Docker and npm distributions.
