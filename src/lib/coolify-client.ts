@@ -718,6 +718,7 @@ export class CoolifyClient {
   private readonly baseUrl: string;
   private readonly tokens: TokenSource;
   private readonly customHeaders: Record<string, string>;
+  private readonly dispatcher?: import('undici').Dispatcher;
   private cachedVersion: string | null = null;
 
   /**
@@ -746,6 +747,7 @@ export class CoolifyClient {
       }
     }
     this.customHeaders = filtered;
+    this.dispatcher = config.dispatcher;
   }
 
   // ===========================================================================
@@ -791,6 +793,10 @@ export class CoolifyClient {
           ...this.customHeaders,
           ...options.headers,
         },
+        // Not in fetch()'s standard RequestInit; undici's global
+        // implementation honors it, and TokenSource's re-read-on-401 logic
+        // above is unaffected either way.
+        ...(this.dispatcher ? ({ dispatcher: this.dispatcher } as Record<string, unknown>) : {}),
       });
 
       // Handle empty responses (204 No Content, etc.)
@@ -957,6 +963,7 @@ export class CoolifyClient {
         Authorization: `Bearer ${this.tokens.current()}`,
         ...this.customHeaders,
       },
+      ...(this.dispatcher ? ({ dispatcher: this.dispatcher } as Record<string, unknown>) : {}),
     });
 
     if (!response.ok) {

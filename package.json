@@ -72,6 +72,7 @@
     "@modelcontextprotocol/core": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "minisearch": "^7.2.0",
+    "undici": "8.10.2",
     "zod": "^4.3.5"
   },
   "devDependencies": {

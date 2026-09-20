@@ -27,6 +27,8 @@
  */
 import { createHash } from 'node:crypto';
 import { InstanceRegistry, type InstanceDefinition } from './instances.js';
+import { pinnedDispatcherFor, UnsafeUrlError } from './tenant-dispatcher.js';
+import type { Resolver } from './ssrf.js';
 import { VaultClient, VaultError } from './vault.js';
 import type { VerifiedIdentity } from './identity.js';
 
@@ -123,6 +125,28 @@ export class NotEnrolledError extends Error {
 }
 
 /**
+ * Surfaced when an already-enrolled instance's address no longer passes the
+ * SSRF guard at request time — most plausibly because its DNS now points
+ * somewhere the guard refuses, which is exactly the rebinding this module
+ * exists to catch rather than the tenant's fault to fix by re-entering a
+ * token. The message says which instance and lets the caller decide how much
+ * of the underlying reason to show.
+ */
+export class UnsafeInstanceError extends Error {
+  constructor(
+    readonly instanceName: string,
+    readonly cause: unknown,
+  ) {
+    super(
+      `Instance "${instanceName}" could not be reached safely: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+    this.name = 'UnsafeInstanceError';
+  }
+}
+
+/**
  * Build the registry for one caller.
  *
  * Throws {@link NotEnrolledError} rather than returning an empty registry: an
@@ -137,15 +161,35 @@ export class NotEnrolledError extends Error {
 export async function registryForCaller(
   store: TenantStore,
   identity: Pick<VerifiedIdentity, 'provider' | 'sub'>,
+  options: { resolver?: Resolver } = {},
 ): Promise<InstanceRegistry> {
   const record = await store.read(identity);
   if (!record || record.instances.length === 0) throw new NotEnrolledError();
 
-  const definitions: InstanceDefinition[] = record.instances.map((instance) => ({
-    name: instance.name,
-    baseUrl: instance.baseUrl,
-    accessToken: instance.accessToken,
-  }));
+  // Each instance's address is re-validated and its connection re-pinned on
+  // every request (see tenant-dispatcher.ts) — the enrolment-time probe
+  // proved the address was safe once; this is what proves it still is, right
+  // before it is used. A stale or now-unsafe address fails this one
+  // instance's tools rather than the whole registry, so a fleet with several
+  // instances degrades one entry at a time.
+  const definitions: InstanceDefinition[] = await Promise.all(
+    record.instances.map(async (instance) => {
+      try {
+        const dispatcher = await pinnedDispatcherFor(instance.baseUrl, options);
+        return {
+          name: instance.name,
+          baseUrl: instance.baseUrl,
+          accessToken: instance.accessToken,
+          dispatcher,
+        };
+      } catch (error) {
+        if (error instanceof UnsafeUrlError) {
+          throw new UnsafeInstanceError(instance.name, error);
+        }
+        throw error;
+      }
+    }),
+  );
   return new InstanceRegistry(definitions);
 }
 

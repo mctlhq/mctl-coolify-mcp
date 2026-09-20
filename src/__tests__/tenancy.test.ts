@@ -2,6 +2,7 @@ import { jest } from '@jest/globals';
 import {
   MemoryTenantStore,
   NotEnrolledError,
+  UnsafeInstanceError,
   VaultTenantStore,
   registryForCaller,
   subjectFromAuthInfo,
@@ -10,6 +11,12 @@ import {
 } from '../lib/tenancy.js';
 import type { VerifiedIdentity } from '../lib/identity.js';
 import type { VaultClient } from '../lib/vault.js';
+import type { Resolver } from '../lib/ssrf.js';
+
+/** A DNS answer that resolves every hostname to a fixed public address. */
+function fakeResolver(address = '203.0.113.10'): Resolver {
+  return async () => [{ address, family: 4 as const }];
+}
 
 const alice: VerifiedIdentity = { provider: 'github', sub: '1001', login: 'alice' };
 const bob: VerifiedIdentity = { provider: 'github', sub: '2002', login: 'bob' };
@@ -37,7 +44,7 @@ describe('tenant isolation', () => {
     await store.write(alice, record('default', 'https://alice.coolify.test', 'alice-token'));
     await store.write(bob, record('default', 'https://bob.coolify.test', 'bob-token'));
 
-    const aliceRegistry = await registryForCaller(store, alice);
+    const aliceRegistry = await registryForCaller(store, alice, { resolver: fakeResolver() });
     expect(aliceRegistry.all).toHaveLength(1);
     expect(aliceRegistry.default.baseUrl).toBe('https://alice.coolify.test');
     expect(aliceRegistry.default.accessToken).toBe('alice-token');
@@ -50,21 +57,60 @@ describe('tenant isolation', () => {
 
   it('refuses to serve a caller who has enrolled nothing', async () => {
     const store = new MemoryTenantStore();
-    await expect(registryForCaller(store, alice)).rejects.toThrow(NotEnrolledError);
+    await expect(registryForCaller(store, alice, { resolver: fakeResolver() })).rejects.toThrow(
+      NotEnrolledError,
+    );
   });
 
   it('treats an emptied record as not enrolled rather than as a fleet of none', async () => {
     const store = new MemoryTenantStore();
     await store.write(alice, { instances: [], updatedAt: Date.now() });
-    await expect(registryForCaller(store, alice)).rejects.toThrow(NotEnrolledError);
+    await expect(registryForCaller(store, alice, { resolver: fakeResolver() })).rejects.toThrow(
+      NotEnrolledError,
+    );
   });
 
   it('stops serving immediately after a revocation', async () => {
     const store = new MemoryTenantStore();
     await store.write(alice, record('default', 'https://alice.coolify.test', 'alice-token'));
-    await expect(registryForCaller(store, alice)).resolves.toBeDefined();
+    await expect(
+      registryForCaller(store, alice, { resolver: fakeResolver() }),
+    ).resolves.toBeDefined();
     await store.revoke(alice);
-    await expect(registryForCaller(store, alice)).rejects.toThrow(NotEnrolledError);
+    await expect(registryForCaller(store, alice, { resolver: fakeResolver() })).rejects.toThrow(
+      NotEnrolledError,
+    );
+  });
+});
+
+describe('SSRF re-validation at request time', () => {
+  it('re-resolves and pins the address on every call, not just at enrolment', async () => {
+    const store = new MemoryTenantStore();
+    await store.write(alice, record('default', 'https://alice.coolify.test', 'alice-token'));
+    const resolver = jest.fn(fakeResolver());
+    await registryForCaller(store, alice, { resolver });
+    await registryForCaller(store, alice, { resolver });
+    // Once per request, not cached across calls — a cached resolution would
+    // be exactly the rebinding window this exists to close.
+    expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses an instance whose stored address now resolves privately, and names it', async () => {
+    // The scenario this guards against: DNS for an enrolled domain has been
+    // repointed since enrolment, now landing inside the cluster's network.
+    const store = new MemoryTenantStore();
+    await store.write(alice, record('rebound', 'https://rebound.example.com', 'alice-token'));
+    const resolver: Resolver = async () => [{ address: '10.0.0.5', family: 4 }];
+    await expect(registryForCaller(store, alice, { resolver })).rejects.toThrow(
+      UnsafeInstanceError,
+    );
+    await expect(registryForCaller(store, alice, { resolver })).rejects.toThrow(/rebound/);
+  });
+
+  it('refuses a literal private or loopback address given directly', async () => {
+    const store = new MemoryTenantStore();
+    await store.write(alice, record('default', 'http://10.255.0.101:8000', 'alice-token'));
+    await expect(registryForCaller(store, alice)).rejects.toThrow(UnsafeInstanceError);
   });
 });
 
