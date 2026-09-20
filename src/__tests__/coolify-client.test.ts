@@ -2,6 +2,7 @@ import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals
 import * as http from 'node:http';
 import { CoolifyClient, errorHint, isRunningStatus } from '../lib/coolify-client.js';
 import type { ServiceType, CreateServiceRequest, EnvironmentVariable } from '../types/coolify.js';
+import { undiciNodeSupported } from './helpers/undici-node-support.js';
 
 // Helper to create mock response
 function mockResponse(
@@ -7281,14 +7282,7 @@ describe('CoolifyClient dispatcher routing (multi-tenant DNS pinning)', () => {
     global.fetch = originalFetch;
   });
 
-  // The standalone `undici` package (8.x) requires Node >=22.19 (its
-  // `CacheStorage` shim needs `webidl.util.markAsUncloneable`, added in
-  // 22.19 — see tenant-dispatcher.ts's own deferred import for the same
-  // constraint). CI's Node 20.x leg would otherwise crash importing it here,
-  // for a test whose whole point is exercising that package specifically.
-  const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
-  const supportsPackageUndici = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 19);
-  const itIfUndiciSupported = supportsPackageUndici ? it : it.skip;
+  const itIfUndiciSupported = undiciNodeSupported() ? it : it.skip;
 
   itIfUndiciSupported(
     'routes a real Agent through a real fetch and actually dispatches on it',

@@ -1,4 +1,5 @@
-import { jest } from '@jest/globals';
+import { jest, it } from '@jest/globals';
+import { undiciNodeSupported } from './helpers/undici-node-support.js';
 import {
   MemoryTenantStore,
   NotEnrolledError,
@@ -39,7 +40,12 @@ describe('record keys', () => {
 });
 
 describe('tenant isolation', () => {
-  it('builds a registry from the caller record alone', async () => {
+  // registryForCaller resolves a real dispatcher per instance
+  // (pinnedDispatcherFor), which needs the standalone undici package —
+  // Node >=22.19, see helpers/undici-node-support.ts.
+  const itIfUndiciSupported = undiciNodeSupported() ? it : it.skip;
+
+  itIfUndiciSupported('builds a registry from the caller record alone', async () => {
     const store = new MemoryTenantStore();
     await store.write(alice, record('default', 'https://alice.coolify.test', 'alice-token'));
     await store.write(bob, record('default', 'https://bob.coolify.test', 'bob-token'));
@@ -70,7 +76,7 @@ describe('tenant isolation', () => {
     );
   });
 
-  it('stops serving immediately after a revocation', async () => {
+  itIfUndiciSupported('stops serving immediately after a revocation', async () => {
     const store = new MemoryTenantStore();
     await store.write(alice, record('default', 'https://alice.coolify.test', 'alice-token'));
     await expect(
@@ -84,16 +90,21 @@ describe('tenant isolation', () => {
 });
 
 describe('SSRF re-validation at request time', () => {
-  it('re-resolves and pins the address on every call, not just at enrolment', async () => {
-    const store = new MemoryTenantStore();
-    await store.write(alice, record('default', 'https://alice.coolify.test', 'alice-token'));
-    const resolver = jest.fn(fakeResolver());
-    await registryForCaller(store, alice, { resolver });
-    await registryForCaller(store, alice, { resolver });
-    // Once per request, not cached across calls — a cached resolution would
-    // be exactly the rebinding window this exists to close.
-    expect(resolver).toHaveBeenCalledTimes(2);
-  });
+  const itIfUndiciSupported = undiciNodeSupported() ? it : it.skip;
+
+  itIfUndiciSupported(
+    're-resolves and pins the address on every call, not just at enrolment',
+    async () => {
+      const store = new MemoryTenantStore();
+      await store.write(alice, record('default', 'https://alice.coolify.test', 'alice-token'));
+      const resolver = jest.fn(fakeResolver());
+      await registryForCaller(store, alice, { resolver });
+      await registryForCaller(store, alice, { resolver });
+      // Once per request, not cached across calls — a cached resolution would
+      // be exactly the rebinding window this exists to close.
+      expect(resolver).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('refuses an instance whose stored address now resolves privately, and names it', async () => {
     // The scenario this guards against: DNS for an enrolled domain has been

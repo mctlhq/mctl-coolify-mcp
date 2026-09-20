@@ -1,9 +1,15 @@
-import { jest } from '@jest/globals';
+import { jest, it } from '@jest/globals';
 import { pinnedDispatcherFor, UnsafeUrlError } from '../lib/tenant-dispatcher.js';
 import type { Resolver } from '../lib/ssrf.js';
+import { undiciNodeSupported } from './helpers/undici-node-support.js';
 
 describe('pinnedDispatcherFor', () => {
-  it('produces a dispatcher for a URL that resolves publicly', async () => {
+  const itIfUndiciSupported = undiciNodeSupported() ? it : it.skip;
+
+  // The only test in this file that actually reaches `pinnedDispatcherFor`'s
+  // `import('undici')` — the others reject before that point (see each
+  // test's own comment on which check they exercise).
+  itIfUndiciSupported('produces a dispatcher for a URL that resolves publicly', async () => {
     const resolver: Resolver = async () => [{ address: '203.0.113.10', family: 4 }];
     const dispatcher = await pinnedDispatcherFor('https://coolify.example.com', { resolver });
     expect(dispatcher).toBeDefined();
