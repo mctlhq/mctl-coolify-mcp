@@ -13,7 +13,7 @@ describe('pinnedDispatcherFor', () => {
   });
 
   it('refuses a private literal address before any DNS lookup', async () => {
-    const resolver = jest.fn();
+    const resolver = jest.fn<Resolver>();
     await expect(pinnedDispatcherFor('http://10.240.26.111:8000', { resolver })).rejects.toThrow(
       UnsafeUrlError,
     );

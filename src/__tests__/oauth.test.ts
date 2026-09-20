@@ -59,6 +59,7 @@ function authorize(
   provider: OAuthProvider,
   clientId: string,
   challenge: string,
+  subject?: { provider: string; sub: string },
 ): { code: string; state: string | null } {
   const validated = provider.validateAuthorizationRequest(
     new URLSearchParams({
@@ -71,7 +72,7 @@ function authorize(
       state: 'client-state',
     }),
   );
-  const { redirectTo } = provider.completeAuthorization(validated);
+  const { redirectTo } = provider.completeAuthorization(validated, subject);
   const url = new URL(redirectTo);
   return { code: url.searchParams.get('code')!, state: url.searchParams.get('state') };
 }
@@ -407,6 +408,99 @@ describe('OAuthProvider', () => {
   it('canonicalResource strips fragments and trailing slashes', () => {
     expect(canonicalResource('https://a.example.com/mcp#frag')).toBe('https://a.example.com/mcp');
     expect(canonicalResource('https://a.example.com/mcp/')).toBe('https://a.example.com/mcp');
+  });
+});
+
+describe('grant subject (#multi-tenant): who a token was issued to', () => {
+  it('is absent when authorization completed without one, unaffected for single-tenant', () => {
+    const provider = makeProvider();
+    const clientId = registerTestClient(provider);
+    const { verifier, challenge } = pkcePair();
+    const { code } = authorize(provider, clientId, challenge);
+    const exchanged = provider.exchange(
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: clientId,
+        code,
+        redirect_uri: 'https://client.example.com/callback',
+        code_verifier: verifier,
+      }),
+    );
+    return provider.verifyAccessToken(exchanged.access_token as string).then((verified) => {
+      expect(verified.extra).toBeUndefined();
+    });
+  });
+
+  it('survives the code exchange onto the access token', async () => {
+    const provider = makeProvider();
+    const clientId = registerTestClient(provider);
+    const { verifier, challenge } = pkcePair();
+    const subject = { provider: 'github', sub: '583231' };
+    const { code } = authorize(provider, clientId, challenge, subject);
+
+    const exchanged = provider.exchange(
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: clientId,
+        code,
+        redirect_uri: 'https://client.example.com/callback',
+        code_verifier: verifier,
+      }),
+    );
+    const verified = await provider.verifyAccessToken(exchanged.access_token as string);
+    expect(verified.extra).toEqual(subject);
+  });
+
+  it('survives refresh rotation onto the new access token, unchanged', async () => {
+    const provider = makeProvider();
+    const clientId = registerTestClient(provider);
+    const { verifier, challenge } = pkcePair();
+    const subject = { provider: 'github', sub: '583231' };
+    const { code } = authorize(provider, clientId, challenge, subject);
+
+    const first = provider.exchange(
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: clientId,
+        code,
+        redirect_uri: 'https://client.example.com/callback',
+        code_verifier: verifier,
+      }),
+    );
+    const refreshed = provider.exchange(
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        refresh_token: first.refresh_token as string,
+      }),
+    );
+    const verified = await provider.verifyAccessToken(refreshed.access_token as string);
+    expect(verified.extra).toEqual(subject);
+  });
+
+  it('cannot be set or overridden from the token request — only completeAuthorization sets it', async () => {
+    // The token endpoint is reachable by anyone who has a code; if it read a
+    // caller-supplied "subject" parameter, a forged one would file an
+    // attacker's tool calls under a victim's stored Coolify credential.
+    const provider = makeProvider();
+    const clientId = registerTestClient(provider);
+    const { verifier, challenge } = pkcePair();
+    const { code } = authorize(provider, clientId, challenge); // no subject at all
+
+    const exchanged = provider.exchange(
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: clientId,
+        code,
+        redirect_uri: 'https://client.example.com/callback',
+        code_verifier: verifier,
+        // An attacker's attempt to smuggle one in: not a parameter this
+        // endpoint reads at all.
+        subject: 'attacker-controlled',
+      }),
+    );
+    const verified = await provider.verifyAccessToken(exchanged.access_token as string);
+    expect(verified.extra).toBeUndefined();
   });
 });
 

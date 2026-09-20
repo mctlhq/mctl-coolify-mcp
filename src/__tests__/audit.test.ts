@@ -191,6 +191,40 @@ describe('audit: one line per call, whatever happens (#370)', () => {
 
     expect(lines[0]).toMatchObject({ instance: 'prod', client_id: 'mcp_client_abc' });
   });
+
+  it('carries the tenant subject separately from the OAuth client, in multi-tenant mode', async () => {
+    // client_id names the app that connected (the same for every tenant using
+    // it); subject names whose Coolify credential the call ran against. A
+    // security review asking "on whose behalf" needs the second one.
+    const lines: AuditEntry[] = [];
+    await auditedCall(
+      {
+        tool: 'deploy',
+        args: { uuid: 'a1' },
+        clientId: 'mcp_client_abc',
+        subject: '583231',
+        write: (e) => lines.push(e),
+      },
+      () => ok,
+    );
+
+    expect(lines[0]).toMatchObject({ client_id: 'mcp_client_abc', subject: '583231' });
+  });
+
+  it('omits subject entirely in single-tenant mode rather than logging a blank field', async () => {
+    const lines: AuditEntry[] = [];
+    await auditedCall(
+      {
+        tool: 'deploy',
+        args: { uuid: 'a1' },
+        clientId: 'mcp_client_abc',
+        write: (e) => lines.push(e),
+      },
+      () => ok,
+    );
+
+    expect(lines[0]).not.toHaveProperty('subject');
+  });
 });
 
 describe('audit: through a live server (#370)', () => {

@@ -879,6 +879,14 @@ export class CoolifyMcpServer extends McpServer {
               // this server has written in HTTP mode has been missing its
               // `client_id` — the field looked implemented and never was.
               clientId: extra.http?.authInfo?.clientId,
+              // Multi-tenant mode's registry binds a `sub` here (see
+              // tenancy.ts's subjectFromAuthInfo, which is the validated
+              // counterpart of this cast); absent in single-tenant mode,
+              // where `authInfo.extra` carries no such field.
+              subject: ((): string | undefined => {
+                const bag = extra.http?.authInfo?.extra as { sub?: unknown } | undefined;
+                return typeof bag?.sub === 'string' ? bag.sub : undefined;
+              })(),
             },
             () => scoped(args, extra),
           ) as ReturnType<ToolCallback<z.ZodObject<Args>>>;
