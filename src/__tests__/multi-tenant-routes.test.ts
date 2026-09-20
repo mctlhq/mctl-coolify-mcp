@@ -511,9 +511,16 @@ describe('public landing and static pages', () => {
     );
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     const text = await res.text();
     expect(text).toContain('coolify-mcp');
     expect(text).toContain('Your data on this server');
+
+    // HEAD request support
+    const headRes = await app.fetch(new Request(`${ISSUER}/`, { method: 'HEAD' }));
+    expect(headRes.status).toBe(200);
+    expect(headRes.headers.get('content-type')).toContain('text/html');
+    expect(await headRes.text()).toBe('');
   });
 
   it('serves /privacy and /terms', async () => {
@@ -535,6 +542,7 @@ describe('public landing and static pages', () => {
     const css = await app.fetch(new Request(`${ISSUER}/assets/tokens.css`));
     expect(css.status).toBe(200);
     expect(css.headers.get('content-type')).toContain('text/css');
+    expect(css.headers.get('x-content-type-options')).toBe('nosniff');
 
     const comps = await app.fetch(new Request(`${ISSUER}/assets/components.css`));
     expect(comps.status).toBe(200);
@@ -554,9 +562,12 @@ describe('public landing and static pages', () => {
     expect(await robots.text()).toContain('Allow: /privacy');
   });
 
-  it('blocks path traversal attempts', async () => {
+  it('blocks path traversal attempts including percent-encoded dot segments', async () => {
     const { app } = makeApp();
     const res = await app.fetch(new Request(`${ISSUER}/assets/../../package.json`));
     expect(res.status).toBe(404);
+
+    const encRes = await app.fetch(new Request(`${ISSUER}/assets/..%2f..%2fpackage.json`));
+    expect(encRes.status).toBe(404);
   });
 });

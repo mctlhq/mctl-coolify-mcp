@@ -29,6 +29,9 @@
   Array.prototype.forEach.call(document.querySelectorAll('.mcp-url-slot'), function (slot) {
     slot.textContent = url;
   });
+  Array.prototype.forEach.call(document.querySelectorAll('.mcp-cli-slot'), function (slot) {
+    slot.textContent = 'claude mcp add --transport http coolify ' + url;
+  });
 
   var copy = document.getElementById('copy-url');
   if (copy && navigator.clipboard) {

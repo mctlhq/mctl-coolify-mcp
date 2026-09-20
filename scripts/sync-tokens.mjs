@@ -34,9 +34,10 @@
  * where the CDN served terracotta on Onest. mctl-design 0.5.0 closed that.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const SOURCE = 'https://ui.mctl.ai/0.5.0/mctl.css';
-const OUTPUT = new URL('../public/assets/tokens.css', import.meta.url).pathname;
+const OUTPUT = fileURLToPath(new URL('../public/assets/tokens.css', import.meta.url));
 
 /**
  * The one thing the design system does not provide: following the operating
@@ -77,7 +78,10 @@ ${declarations}
 }
 
 async function fetchThemeCss() {
-  const response = await fetch(SOURCE, { redirect: 'error' });
+  const response = await fetch(SOURCE, {
+    redirect: 'error',
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!response.ok) throw new Error(`${SOURCE} returned ${response.status}`);
   return response.text();
 }

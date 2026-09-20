@@ -56,6 +56,11 @@ curl https://mcp.example.com/.well-known/oauth-authorization-server
 # JSON with "issuer": "https://mcp.example.com"
 ```
 
+Visiting `https://mcp.example.com/` in a web browser renders the public landing
+page (`public/index.html`). Documentation of data practices and terms are served
+at `/privacy` and `/terms`. MCP clients and API callers querying the root without
+`Accept: text/html` receive the standard protocol response.
+
 ### `COOLIFY_BASE_URL` must be reachable from inside the container
 
 The container calls the Coolify API, and the authorize page validates tokens
