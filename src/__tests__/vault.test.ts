@@ -70,10 +70,29 @@ describe('reads and writes', () => {
   it('sends the token as a header and wraps the payload for KV v2', async () => {
     const calls = recorder([() => ({ body: {} })]);
     await new VaultClient(config).write('users/abc', { instances_json: '[]' });
-    expect(calls[0].method).toBe('POST');
-    expect(calls[0].url).toBe('https://vault.test/v1/coolify-mcp-users/data/users/abc');
-    expect(calls[0].headers['x-vault-token']).toBe('root-token');
-    expect(JSON.parse(calls[0].body ?? '{}')).toEqual({ data: { instances_json: '[]' } });
+    const dataCall = calls.find((c) => c.url.includes('/data/'));
+    expect(dataCall?.method).toBe('POST');
+    expect(dataCall?.url).toBe('https://vault.test/v1/coolify-mcp-users/data/users/abc');
+    expect(dataCall?.headers['x-vault-token']).toBe('root-token');
+    expect(JSON.parse(dataCall?.body ?? '{}')).toEqual({ data: { instances_json: '[]' } });
+  });
+
+  it("sets this path's own max_versions on every write, since the mount default cannot be trusted", async () => {
+    // Real-world reason this exists: the platform's actual Vault mount is
+    // shared across every team and configured with max_versions: 0
+    // (unlimited) — this client cannot assume otherwise.
+    const calls = recorder([() => ({ body: {} })]);
+    await new VaultClient(config).write('users/abc', { instances_json: '[]' });
+    const metaCall = calls.find((c) => c.url.includes('/metadata/') && c.method === 'POST');
+    expect(metaCall?.url).toBe('https://vault.test/v1/coolify-mcp-users/metadata/users/abc');
+    expect(JSON.parse(metaCall?.body ?? '{}')).toEqual({ max_versions: 1 });
+  });
+
+  it('honors an explicit maxVersions instead of the default of 1', async () => {
+    const calls = recorder([() => ({ body: {} })]);
+    await new VaultClient({ ...config, maxVersions: 3 }).write('users/abc', {});
+    const metaCall = calls.find((c) => c.url.includes('/metadata/') && c.method === 'POST');
+    expect(JSON.parse(metaCall?.body ?? '{}')).toEqual({ max_versions: 3 });
   });
 
   it('reports an unreachable Vault as such rather than as a missing record', async () => {
@@ -105,8 +124,13 @@ describe('revocation', () => {
 
     // Overwrite first, so a reader between the two calls sees nothing rather
     // than the old token.
-    expect(calls[0].url).toContain('/data/users/abc');
-    expect(JSON.parse(calls[0].body ?? '{}')).toEqual({ data: {} });
+    const overwrite = calls.find((c) => c.url.includes('/data/users/abc'));
+    expect(JSON.parse(overwrite?.body ?? '{}')).toEqual({ data: {} });
+    // And the overwrite must land before the metadata GET that decides what
+    // to destroy, or a concurrent reader's window is exactly reversed.
+    expect(calls.indexOf(overwrite!)).toBeLessThan(
+      calls.findIndex((c) => c.url.includes('/metadata/') && c.method === 'GET'),
+    );
 
     const destroy = calls.find((c) => c.url.includes('/destroy/'));
     expect(destroy).toBeDefined();
@@ -115,7 +139,10 @@ describe('revocation', () => {
 
   it('stops quietly when there is nothing left to destroy', async () => {
     const calls = recorder([
-      (c) => (c.url.includes('/metadata/') ? { status: 404 } : undefined),
+      // Only the metadata GET (destroy()'s "what versions exist" check) is
+      // 404; the metadata POST write() makes to set max_versions must still
+      // succeed, or the empty overwrite itself would fail.
+      (c) => (c.url.includes('/metadata/') && c.method === 'GET' ? { status: 404 } : undefined),
       () => ({ body: {} }),
     ]);
     await new VaultClient(config).destroy('users/gone');

@@ -45,8 +45,27 @@ export class VaultError extends Error {
 export interface VaultConfig {
   /** Base address, e.g. `https://vault.mctl.ai`. */
   address: string;
-  /** KV v2 mount holding tenant records, e.g. `coolify-mcp-users`. */
+  /**
+   * KV v2 mount holding tenant records. Not assumed to be dedicated to this
+   * server or configured with any particular retention: {@link VaultConfig.maxVersions}
+   * is what this client sets on its own paths regardless of what the mount's
+   * default is. A shared, general-purpose mount (`secret/`, one per cluster)
+   * is the common case, not an exception to plan for.
+   */
   mount: string;
+  /**
+   * Every path this client writes gets its OWN `max_versions` set to this,
+   * via KV v2's per-path metadata — not inherited from the mount. Vault's own
+   * mount-wide default is unlimited (`max_versions: 0`) unless an operator
+   * configured otherwise, and this client must not depend on that: a shared
+   * mount serving many unrelated teams is not this server's to reconfigure.
+   * Kept small on purpose — every version written before a revoke stays
+   * readable to anyone with read access to the mount until that revoke
+   * destroys it, so the fewer versions accumulate between writes, the
+   * smaller that exposure. Default 1: a re-enrolled token immediately
+   * supersedes, rather than joins, the one before it.
+   */
+  maxVersions?: number;
   /**
    * A static token. Development and tests only — in the cluster the token is
    * obtained by Kubernetes auth and rotated, which a static one never is.
@@ -67,6 +86,7 @@ export function vaultFromEnv(env: NodeJS.ProcessEnv): VaultConfig | undefined {
   return {
     address: address.replace(/\/+$/, ''),
     mount,
+    maxVersions: env.VAULT_MAX_VERSIONS ? Number(env.VAULT_MAX_VERSIONS) : undefined,
     token: env.VAULT_TOKEN?.trim() || undefined,
     role: env.VAULT_ROLE?.trim() || undefined,
     serviceAccountTokenPath: env.VAULT_K8S_TOKEN_PATH?.trim() || DEFAULT_K8S_TOKEN_PATH,
@@ -213,8 +233,19 @@ export class VaultClient {
     return data as Record<string, unknown>;
   }
 
-  /** Write a record, replacing whatever was there. */
+  /**
+   * Write a record, replacing whatever was there.
+   *
+   * Sets this path's own `max_versions` metadata every time, not once: the
+   * cost is one extra idempotent call, and skipping it after the first write
+   * would mean a path created before this client existed (or written by some
+   * other caller) keeps whatever retention it already had.
+   */
   async write(key: string, data: Record<string, unknown>): Promise<void> {
+    await this.authed(this.metadataUrl(key), {
+      method: 'POST',
+      body: JSON.stringify({ max_versions: this.config.maxVersions ?? 1 }),
+    });
     await this.authed(this.dataUrl(key), { method: 'POST', body: JSON.stringify({ data }) });
   }
 
