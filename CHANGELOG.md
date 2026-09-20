@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.1] - 2026-09-20
+
+### Fixed
+
+- **Every Google-authenticated request in multi-tenant mode was rejected as "not bound to an account", even after a successful login and enrolment.** `tenancy.ts`'s `subjectFromAuthInfo` — the function that reads the `{ provider, sub }` the OAuth layer stamps onto a verified access token — still hardcoded `bag.provider !== 'github'` from before 3.7.0 added Google as a second provider, so it discarded the subject on every Google-issued token regardless of how well-formed it was, then refused to serve the request at all rather than guess which tenant it meant. GitHub was unaffected because it was the one value the check accepted. Caught live testing the hosted multi-tenant instance end-to-end through claude.ai: GitHub login worked, Google looked identical up through enrolment (Vault correctly held a `(google, sub)` record with a linked instance) and then failed on every single MCP call. Fixed by accepting either configured provider and echoing back whichever one actually verified, instead of a literal.
+
 ## [3.7.0] - 2026-09-20
 
 ### Added
