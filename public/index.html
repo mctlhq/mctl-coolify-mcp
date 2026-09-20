@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      try {
+        var t = localStorage.getItem('coolify-mcp-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
+    <title>coolify-mcp — let an AI manage your Coolify, with guardrails</title>
+    <meta
+      name="description"
+      content="A multi-tenant MCP server for Coolify v4. Connect Claude, ChatGPT or Cursor to your self-hosted PaaS: deploy, diagnose, restart and roll back — with human confirmation before anything destructive."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="coolify-mcp" />
+    <meta
+      property="og:title"
+      content="coolify-mcp — let an AI manage your Coolify, with guardrails"
+    />
+    <meta
+      property="og:description"
+      content="A multi-tenant MCP server for Coolify v4. Deploy, diagnose and operate your infrastructure through Claude, ChatGPT or any MCP client."
+    />
+    <meta property="og:url" content="https://coolify.mctl.ai" />
+    <meta name="twitter:card" content="summary" />
+    <meta
+      name="twitter:title"
+      content="coolify-mcp — let an AI manage your Coolify, with guardrails"
+    />
+    <meta
+      name="twitter:description"
+      content="A multi-tenant MCP server for Coolify v4. Deploy, diagnose and operate your infrastructure through Claude, ChatGPT or any MCP client."
+    />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+    <link rel="stylesheet" href="/assets/tokens.css" />
+    <link rel="stylesheet" href="/assets/components.css" />
+  </head>
+  <body>
+    <header class="wrap topbar">
+      <a class="brand" href="/">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect
+            x="4"
+            y="6"
+            width="24"
+            height="20"
+            rx="3"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            style="color: var(--accent)"
+          />
+          <line
+            x1="4"
+            y1="14"
+            x2="28"
+            y2="14"
+            stroke="currentColor"
+            stroke-width="1.5"
+            style="color: var(--accent)"
+          />
+          <line
+            x1="4"
+            y1="20"
+            x2="28"
+            y2="20"
+            stroke="currentColor"
+            stroke-width="1.5"
+            style="color: var(--accent)"
+          />
+          <circle cx="8" cy="10" r="1.5" fill="currentColor" style="color: var(--accent)" />
+          <circle cx="8" cy="17" r="1.5" fill="currentColor" style="color: var(--accent)" />
+          <circle cx="8" cy="23" r="1.5" fill="currentColor" style="color: var(--accent)" />
+        </svg>
+        coolify-mcp
+      </a>
+      <nav class="topbar-links">
+        <a href="/enroll">Enroll</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+        <a href="https://github.com/StuMason/coolify-mcp">GitHub</a>
+        <button
+          class="theme-toggle"
+          id="theme-toggle"
+          type="button"
+          hidden
+          aria-label="Switch between light and dark"
+        >
+          <svg
+            class="icon-moon"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+          </svg>
+          <svg
+            class="icon-sun"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="4" />
+            <path
+              d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
+            />
+          </svg>
+        </button>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero wrap">
+        <p class="eyebrow">MCP server</p>
+        <h1>Let an AI manage your Coolify.<br />With guardrails.</h1>
+        <p class="lead">
+          coolify-mcp gives Claude, ChatGPT, Cursor and any MCP client a deliberate way to operate a
+          live Coolify v4 platform — deploy, diagnose, restart, roll back — and stops to ask a
+          person before it does anything it cannot undo.
+        </p>
+
+        <div class="endpoint">
+          <span class="label">Endpoint</span>
+          <code id="mcp-url">https://coolify.mctl.ai/mcp</code>
+        </div>
+
+        <div class="cta-row">
+          <button
+            class="btn btn-primary"
+            id="copy-url"
+            type="button"
+            data-idle="Copy MCP URL"
+            data-done="Copied"
+          >
+            Copy MCP URL
+          </button>
+          <a class="btn btn-secondary" href="/enroll">Enroll your instance</a>
+        </div>
+      </section>
+
+      <section class="wrap" id="features">
+        <div class="section-head">
+          <h2>What it does</h2>
+          <p>
+            45 tools covering the whole Coolify platform, built around safety and context
+            efficiency.
+          </p>
+        </div>
+        <div class="card-grid">
+          <div class="card">
+            <div class="card-icon">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              >
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            </div>
+            <h3>Asks before it hurts</h3>
+            <p>
+              Destructive operations — stop all apps, bulk env updates, resource deletes — require
+              explicit human confirmation with a calculated blast radius.
+            </p>
+          </div>
+          <div class="card">
+            <div class="card-icon">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              >
+                <rect x="3" y="11" width="18" height="11" rx="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            </div>
+            <h3>Secrets stay hidden</h3>
+            <p>
+              Environment variables come back masked as <code>***</code>. Revealing a single value
+              is a separate, deliberate request. Private keys are never returned.
+            </p>
+          </div>
+          <div class="card">
+            <div class="card-icon">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              >
+                <path
+                  d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
+                />
+                <polyline points="3.3 7 12 12 20.7 7" />
+                <line x1="12" y1="22" x2="12" y2="12" />
+              </svg>
+            </div>
+            <h3>Fits in the context window</h3>
+            <p>
+              Lists return compact summaries — 90 to 99% smaller than raw API responses. Full
+              details are fetched on demand.
+            </p>
+          </div>
+          <div class="card">
+            <div class="card-icon">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              >
+                <rect x="2" y="2" width="20" height="8" rx="2" />
+                <rect x="2" y="14" width="20" height="8" rx="2" />
+                <line x1="6" y1="6" x2="6.01" y2="6" />
+                <line x1="6" y1="18" x2="6.01" y2="18" />
+              </svg>
+            </div>
+            <h3>Multi-instance fleet</h3>
+            <p>
+              Manage several Coolify installations from one connection. Every tool takes an instance
+              name; <code>instance: "all"</code> fans out across the fleet.
+            </p>
+          </div>
+          <div class="card">
+            <div class="card-icon">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              >
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+            </div>
+            <h3>Multi-tenant</h3>
+            <p>
+              Sign in with GitHub or Google, link your own Coolify, and get an isolated MCP
+              connection. Your instance is never visible to another tenant.
+            </p>
+          </div>
+          <div class="card">
+            <div class="card-icon">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+              </svg>
+            </div>
+            <h3>Built-in docs search</h3>
+            <p>
+              An embedded full-text index of the Coolify documentation, searchable as a tool. No
+              round-trip to an external service.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="wrap" id="tools">
+        <div class="section-head">
+          <h2>Tool categories</h2>
+          <p>
+            The full tool reference is in the
+            <a href="https://github.com/StuMason/coolify-mcp/blob/main/docs/tools.md">docs</a>. Here
+            is the shape of the surface.
+          </p>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Category</th>
+                <th scope="col">What it covers</th>
+                <th scope="col">Tools</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Applications</strong></td>
+                <td class="muted">
+                  CRUD, deployment triggers, domain routing, build-pack configuration, preview
+                  deployments.
+                </td>
+                <td>
+                  <code>application</code> <code>deploy</code> <code>deployment</code>
+                  <code>diagnose_app</code>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Databases</strong></td>
+                <td class="muted">
+                  PostgreSQL, MySQL, MariaDB, MongoDB, Redis, KeyDB, ClickHouse, Dragonfly — create,
+                  configure, backup schedules.
+                </td>
+                <td><code>database</code> <code>database_backups</code></td>
+              </tr>
+              <tr>
+                <td><strong>Servers</strong></td>
+                <td class="muted">
+                  Server health, SSH reachability, Docker status, CPU/memory/disk metrics, domain
+                  extraction.
+                </td>
+                <td>
+                  <code>get_server</code> <code>server_resources</code> <code>diagnose_server</code>
+                  <code>validate_server</code>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Environment</strong></td>
+                <td class="muted">
+                  Read and write env vars (masked by default), bulk updates across apps, project and
+                  environment management.
+                </td>
+                <td>
+                  <code>env_vars</code> <code>bulk_env_update</code> <code>environments</code>
+                  <code>projects</code>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Operations</strong></td>
+                <td class="muted">
+                  Start, stop, restart any resource. Stop all apps (emergency brake). Redeploy or
+                  restart by project or tag.
+                </td>
+                <td>
+                  <code>control</code> <code>stop_all_apps</code> <code>redeploy_project</code>
+                  <code>tags</code>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Diagnostics</strong></td>
+                <td class="muted">
+                  Estate-wide issue scan, container logs with injection defense, system health,
+                  version compatibility checks.
+                </td>
+                <td>
+                  <code>find_issues</code> <code>logs</code> <code>system</code>
+                  <code>search_docs</code>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="wrap" id="setup">
+        <div class="section-head">
+          <h2>Set it up</h2>
+          <p>Three steps, in order.</p>
+        </div>
+        <ol class="steps">
+          <li>
+            <strong>Add the connector.</strong> Paste this endpoint into your assistant:
+            <code class="mcp-url-slot">https://coolify.mctl.ai/mcp</code>
+            <br />In claude.ai:
+            <em>Customize &rarr; Connectors &rarr; "+" &rarr; Add custom connector</em>, paste the
+            URL, then <em>Add</em>. <br />In ChatGPT:
+            <em
+              >Settings &rarr; Apps &amp; Connectors &rarr; Advanced settings &rarr; Developer
+              mode</em
+            >, then back in <em>Apps &amp; Connectors &rarr; Create</em>, paste the URL as the
+            connector URL. <br />In Claude Code or another MCP client:
+            <code>claude mcp add --transport http coolify https://coolify.mctl.ai/mcp</code>
+          </li>
+          <li>
+            <strong>Sign in with GitHub or Google.</strong> Happens automatically on the first
+            <em>Connect</em>. Any GitHub or Google account can sign in. A consent screen names the
+            client and what it is being granted.
+          </li>
+          <li>
+            <strong>Link your Coolify.</strong> Open <a href="/enroll">/enroll</a> and enter your
+            Coolify instance URL and API key (<em>Settings &rarr; API &rarr; Generate Token</em>).
+            The page tests the credentials against your instance before saving them. If your Coolify
+            has "Allowed API IPs" enabled, the egress addresses are shown on the enrolment page.
+          </li>
+        </ol>
+      </section>
+
+      <section class="wrap" id="security">
+        <div class="section-head">
+          <h2>Your data on this server</h2>
+          <p>We are transparent about what we store, what we can see, and what we cannot undo.</p>
+        </div>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary>What is stored?</summary>
+            <p>
+              Your Coolify API token is stored in HashiCorp Vault (KV v2) under a dedicated mount.
+              The path is keyed by the SHA-256 hash of your identity provider and user ID — it does
+              not reveal your login or email. Each write enforces <code>max_versions: 1</code>, so
+              Vault does not accumulate old versions.
+            </p>
+          </details>
+          <details class="faq-item">
+            <summary>Can the platform operator see my Coolify token?</summary>
+            <p>
+              Yes, technically. This is a self-hosted platform, not a zero-knowledge vault. The
+              operator has administrative access to the Vault cluster and can read any stored token
+              in plaintext. This is the same trust model as any managed service where the
+              infrastructure is controlled by the operator. We are transparent about this because we
+              think you should know.
+            </p>
+          </details>
+          <details class="faq-item">
+            <summary>Can another tenant reach my instance?</summary>
+            <p>
+              No. Every request builds a fresh registry from the calling tenant's own Vault record.
+              Two tenants never share a registry. Outbound connections are guarded against SSRF
+              (private IP blocklist, DNS pinning) and each tenant gets a pinned HTTP dispatcher that
+              prevents DNS rebinding.
+            </p>
+          </details>
+          <details class="faq-item">
+            <summary>What is masked from AI clients?</summary>
+            <p>
+              Environment variable values return as <code>***</code>. Revealing one requires an
+              explicit <code>reveal: true</code> on a single named key. Private SSH keys are never
+              returned. Container logs are wrapped in a cryptographic nonce boundary to defend
+              against prompt injection.
+            </p>
+          </details>
+          <details class="faq-item">
+            <summary>How do I delete my data?</summary>
+            <p>
+              Open <a href="/enroll">/enroll</a> and click "Unlink everything and delete the stored
+              tokens." This uses Vault <code>destroy</code> (hard delete), not
+              <code>delete</code> (soft tombstone). All versions of your record are permanently
+              removed. Revocation takes effect immediately.
+            </p>
+          </details>
+          <details class="faq-item">
+            <summary>Does it phone home?</summary>
+            <p>
+              Zero telemetry, zero analytics, zero phone-home. The only outbound connections go to
+              the Coolify instances you linked and, optionally, a one-time documentation index
+              refresh from <code>coolify.io</code>.
+            </p>
+          </details>
+        </div>
+      </section>
+
+      <section class="wrap">
+        <div class="section-head">
+          <h2>Questions</h2>
+        </div>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary>What Coolify versions are supported?</summary>
+            <p>
+              Coolify v4.0 through v4.3. The server tracks API changes across versions and the tool
+              documentation notes where endpoints differ. <code>get_version</code> checks
+              compatibility on every connection.
+            </p>
+          </details>
+          <details class="faq-item">
+            <summary>Can an assistant delete my apps on its own?</summary>
+            <p>
+              No. Destructive operations require explicit human confirmation via the MCP elicitation
+              protocol. The blast radius is calculated and displayed; if the estate changes before
+              you confirm, the ticket is invalidated. In read-only mode (<code>MCP_READONLY</code>),
+              writes are disabled entirely.
+            </p>
+          </details>
+          <details class="faq-item">
+            <summary>Can I run it locally instead?</summary>
+            <p>
+              Yes. The upstream <code>npx @masonator/coolify-mcp</code> runs in stdio mode on your
+              machine. Your token stays local. This hosted instance adds multi-tenancy, Vault
+              storage, and OAuth 2.1 for remote MCP clients.
+            </p>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <div class="footer-row">
+        <span>coolify-mcp — part of the <a href="https://mctl.ai">mctl</a> platform.</span>
+        <span
+          ><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> ·
+          <a href="/enroll">Enroll</a> ·
+          <a href="https://github.com/StuMason/coolify-mcp">Source</a></span
+        >
+      </div>
+    </footer>
+
+    <script src="/assets/site.js"></script>
+  </body>
+</html>

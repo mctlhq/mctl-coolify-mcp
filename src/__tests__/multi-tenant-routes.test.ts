@@ -502,3 +502,61 @@ describe('single-tenant mode is unaffected', () => {
     ).toBe(404);
   });
 });
+
+describe('public landing and static pages', () => {
+  it('serves landing page to browsers requesting text/html', async () => {
+    const { app } = makeApp();
+    const res = await app.fetch(
+      new Request(`${ISSUER}/`, { headers: { accept: 'text/html,application/xhtml+xml' } }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    const text = await res.text();
+    expect(text).toContain('coolify-mcp');
+    expect(text).toContain('Your data on this server');
+  });
+
+  it('serves /privacy and /terms', async () => {
+    const { app } = makeApp();
+    const priv = await app.fetch(new Request(`${ISSUER}/privacy`));
+    expect(priv.status).toBe(200);
+    expect(priv.headers.get('content-type')).toContain('text/html');
+    expect(await priv.text()).toContain('What coolify-mcp does with your data');
+
+    const terms = await app.fetch(new Request(`${ISSUER}/terms`));
+    expect(terms.status).toBe(200);
+    expect(terms.headers.get('content-type')).toContain('text/html');
+    expect(await terms.text()).toContain('Terms of service');
+  });
+
+  it('serves static assets: tokens.css, components.css, site.js, favicon.svg, robots.txt', async () => {
+    const { app } = makeApp();
+
+    const css = await app.fetch(new Request(`${ISSUER}/assets/tokens.css`));
+    expect(css.status).toBe(200);
+    expect(css.headers.get('content-type')).toContain('text/css');
+
+    const comps = await app.fetch(new Request(`${ISSUER}/assets/components.css`));
+    expect(comps.status).toBe(200);
+    expect(comps.headers.get('content-type')).toContain('text/css');
+
+    const js = await app.fetch(new Request(`${ISSUER}/assets/site.js`));
+    expect(js.status).toBe(200);
+    expect(js.headers.get('content-type')).toContain('text/javascript');
+
+    const icon = await app.fetch(new Request(`${ISSUER}/favicon.svg`));
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get('content-type')).toBe('image/svg+xml');
+
+    const robots = await app.fetch(new Request(`${ISSUER}/robots.txt`));
+    expect(robots.status).toBe(200);
+    expect(robots.headers.get('content-type')).toContain('text/plain');
+    expect(await robots.text()).toContain('Allow: /privacy');
+  });
+
+  it('blocks path traversal attempts', async () => {
+    const { app } = makeApp();
+    const res = await app.fetch(new Request(`${ISSUER}/assets/../../package.json`));
+    expect(res.status).toBe(404);
+  });
+});

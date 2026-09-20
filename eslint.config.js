@@ -22,9 +22,8 @@ export default tseslint.config(
     },
   },
   {
-    // site/ (docs) and evals/ (eval + red-team harness) are self-contained
-    // mini-projects with their own deps and toolchain. Ignored to keep the
-    // root lint scoped to the MCP source.
-    ignores: ['dist/', 'node_modules/', 'coverage/', 'site/', 'evals/'],
+    // site/ (docs), evals/ (eval + red-team harness), and public/ (browser assets)
+    // are ignored to keep the root lint scoped to the MCP server source.
+    ignores: ['dist/', 'node_modules/', 'coverage/', 'site/', 'evals/', 'public/'],
   },
 );

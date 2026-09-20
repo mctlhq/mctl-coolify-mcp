@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      try {
+        var t = localStorage.getItem('coolify-mcp-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
+    <title>Terms — coolify-mcp</title>
+    <meta
+      name="description"
+      content="Terms of service for coolify-mcp: what the service provides, what is expected of you, and liability limitations."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+    <link rel="stylesheet" href="/assets/tokens.css" />
+    <link rel="stylesheet" href="/assets/components.css" />
+  </head>
+  <body>
+    <header class="wrap topbar">
+      <a class="brand" href="/">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect
+            x="4"
+            y="6"
+            width="24"
+            height="20"
+            rx="3"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            style="color: var(--accent)"
+          />
+          <line
+            x1="4"
+            y1="14"
+            x2="28"
+            y2="14"
+            stroke="currentColor"
+            stroke-width="1.5"
+            style="color: var(--accent)"
+          />
+          <line
+            x1="4"
+            y1="20"
+            x2="28"
+            y2="20"
+            stroke="currentColor"
+            stroke-width="1.5"
+            style="color: var(--accent)"
+          />
+          <circle cx="8" cy="10" r="1.5" fill="currentColor" style="color: var(--accent)" />
+          <circle cx="8" cy="17" r="1.5" fill="currentColor" style="color: var(--accent)" />
+          <circle cx="8" cy="23" r="1.5" fill="currentColor" style="color: var(--accent)" />
+        </svg>
+        coolify-mcp
+      </a>
+      <nav class="topbar-links">
+        <a href="/enroll">Enroll</a>
+        <a href="https://github.com/StuMason/coolify-mcp">GitHub</a>
+        <button
+          class="theme-toggle"
+          id="theme-toggle"
+          type="button"
+          hidden
+          aria-label="Switch between light and dark"
+        >
+          <svg
+            class="icon-moon"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+          </svg>
+          <svg
+            class="icon-sun"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="4" />
+            <path
+              d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
+            />
+          </svg>
+        </button>
+      </nav>
+    </header>
+
+    <main class="page">
+      <p class="eyebrow">Terms</p>
+      <h1>Terms of service</h1>
+      <p class="updated">Last updated 20 September 2026</p>
+
+      <p>
+        coolify-mcp is an open-source Model Context Protocol server that bridges AI assistants to
+        Coolify v4 infrastructure. Using this hosted multi-tenant deployment entails accepting the
+        terms below.
+      </p>
+
+      <h2>What the service is</h2>
+      <ul>
+        <li>
+          It is an API bridge and protocol translation proxy between your MCP client and your
+          Coolify instance.
+        </li>
+        <li>
+          It does not host your applications, manage your servers, or provide computing resources.
+          All deployment targets remain on your own Coolify platform.
+        </li>
+        <li>
+          It is provided free of charge, as-is, with no formal service level agreement (SLA). The
+          service may experience downtime, maintenance periods, or updates without advance notice.
+        </li>
+      </ul>
+
+      <h2>What is expected of you</h2>
+      <ul>
+        <li>
+          <strong>Authorized access only:</strong> You may only link Coolify instances and API
+          tokens that you own or are explicitly authorized to administer.
+        </li>
+        <li>
+          <strong>Compliance and security:</strong> You remain solely responsible for the actions
+          initiated through your assistant, including software deployed, configuration changes made,
+          and resources terminated.
+        </li>
+        <li>
+          <strong>No misuse:</strong> You agree not to use the server to conduct penetration testing
+          against third parties, bypass rate limits, or disrupt the shared multi-tenant
+          infrastructure.
+        </li>
+        <li>
+          <strong>Account security:</strong> You are responsible for keeping your GitHub or Google
+          credentials secure. Anyone possessing access to your identity account can manage your
+          enrolled Coolify instances.
+        </li>
+      </ul>
+
+      <h2>Automated assistant actions</h2>
+      <p>
+        AI models can make errors, misinterpret logs, or execute unexpected commands. While
+        coolify-mcp implements safeguards (such as elicitation prompts for destructive actions,
+        secret masking, and log sanitization), you are ultimately responsible for confirming
+        operations. Review all actions and parameters proposed by your assistant before granting
+        execution approval.
+      </p>
+
+      <h2>Operator access &amp; trust model</h2>
+      <p>
+        As documented in our <a href="/privacy">Privacy Policy</a>, this hosted service is managed
+        by the platform operator. The operator holds administrative access to the underlying storage
+        (HashiCorp Vault) and could technically view stored API tokens. If your security posture or
+        regulatory requirements mandate zero-knowledge isolation or strict credential isolation from
+        platform operators, you should run the open-source coolify-mcp server locally (via stdio) or
+        self-host your own container.
+      </p>
+
+      <h2>No warranty and limitation of liability</h2>
+      <p>
+        THE SERVICE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+        BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR
+        NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR OPERATORS BE LIABLE FOR ANY CLAIM,
+        DAMAGES, DATA LOSS, SYSTEM OUTAGE, OR OTHER LIABILITY ARISING FROM THE USE OF OR INABILITY
+        TO USE THIS SERVICE.
+      </p>
+
+      <h2>Termination and changes</h2>
+      <p>
+        Access may be suspended or revoked at any time if these terms are violated or if abuse is
+        detected. You can terminate your use of the service at any time by unlinking your instance
+        on <a href="/enroll">/enroll</a> and deleting your connector in your AI client.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions regarding these terms can be sent to
+        <a href="mailto:support@mctl.ai">support@mctl.ai</a>.
+      </p>
+    </main>
+
+    <footer class="wrap">
+      <div class="footer-row">
+        <span>coolify-mcp — part of the <a href="https://mctl.ai">mctl</a> platform.</span>
+        <span
+          ><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> ·
+          <a href="/enroll">Enroll</a> ·
+          <a href="https://github.com/StuMason/coolify-mcp">Source</a></span
+        >
+      </div>
+    </footer>
+
+    <script src="/assets/site.js"></script>
+  </body>
+</html>
