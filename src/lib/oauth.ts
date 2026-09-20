@@ -43,6 +43,19 @@ export interface RegisteredClient {
   created_at: number;
 }
 
+/**
+ * Who the grant belongs to, in multi-tenant mode.
+ *
+ * Bound at authorization time and carried unchanged through every exchange and
+ * rotation, so a token cannot be made to act for a tenant other than the one
+ * who logged in. Absent in single-tenant mode, where the container's own
+ * credential serves every caller and there is no tenant to name.
+ */
+export interface GrantSubject {
+  provider: string;
+  sub: string;
+}
+
 interface AuthorizationCode {
   /** SHA-256 of the code handed to the client. */
   code_hash: string;
@@ -53,6 +66,8 @@ interface AuthorizationCode {
   resource: string;
   /** Grant family — every token descended from this code shares it. */
   grant_id: string;
+  /** The authenticated tenant, when there is one. */
+  subject?: GrantSubject;
   expires_at: number;
 }
 
@@ -68,6 +83,8 @@ interface StoredToken {
   revoked: boolean;
   /** Refresh only: set when this token has been rotated away. */
   rotated: boolean;
+  /** The authenticated tenant, when there is one. */
+  subject?: GrantSubject;
 }
 
 interface OAuthState {
@@ -83,6 +100,15 @@ export interface VerifiedAccessToken {
   scopes: string[];
   expiresAt: number;
   resource?: URL;
+  /**
+   * Pass-through bag the SDK hands to the MCP handler as `authInfo.extra`.
+   * This is how the per-request server factory learns which tenant it serves.
+   *
+   * Typed as the SDK types it — an open record — while everything that reads
+   * it goes through `subjectFromAuthInfo`, which re-validates the shape rather
+   * than trusting it.
+   */
+  extra?: Record<string, unknown>;
 }
 
 export class OAuthErrorResponse extends Error {
@@ -619,12 +645,19 @@ export class OAuthProvider {
   }
 
   /**
-   * Issue an authorization code. The caller MUST have completed
-   * proof-of-access first (tier 2: the presented Coolify token validated
-   * against `/teams/current` and discarded) — this method deliberately takes
-   * no credential, so there is nothing here to store or leak.
+   * Issue an authorization code. The caller MUST have established who the
+   * requester is first — in single-tenant mode by proof of access (the
+   * presented Coolify token validated against `/teams/current` and discarded),
+   * in multi-tenant mode by an identity login that yields `subject`.
+   *
+   * Either way this method takes no credential, so there is nothing here to
+   * store or leak. `subject` is a name, not an authorization: what that name
+   * may reach is decided by the enrolment record at request time.
    */
-  completeAuthorization(request: ReturnType<OAuthProvider['validateAuthorizationRequest']>): {
+  completeAuthorization(
+    request: ReturnType<OAuthProvider['validateAuthorizationRequest']>,
+    subject?: GrantSubject,
+  ): {
     redirectTo: string;
   } {
     const code = opaque('mcp_code');
@@ -636,6 +669,7 @@ export class OAuthProvider {
       scope: request.scope,
       resource: request.resource,
       grant_id: opaque('mcp_grant'),
+      subject,
       expires_at: Date.now() + 10 * 60 * 1000,
     });
     this.persist();
@@ -700,7 +734,13 @@ export class OAuthProvider {
       throw new OAuthErrorResponse('invalid_target', 'resource does not match the authorized one');
     }
 
-    return this.issueTokens(record.client_id, record.scope, record.resource, record.grant_id);
+    return this.issueTokens(
+      record.client_id,
+      record.scope,
+      record.resource,
+      record.grant_id,
+      record.subject,
+    );
   }
 
   private exchangeRefresh(params: URLSearchParams): Record<string, unknown> {
@@ -723,7 +763,13 @@ export class OAuthProvider {
     }
 
     record.rotated = true;
-    return this.issueTokens(record.client_id, record.scope, record.resource, record.grant_id);
+    return this.issueTokens(
+      record.client_id,
+      record.scope,
+      record.resource,
+      record.grant_id,
+      record.subject,
+    );
   }
 
   private issueTokens(
@@ -731,6 +777,7 @@ export class OAuthProvider {
     scope: string,
     resource: string,
     grantId: string,
+    subject?: GrantSubject,
   ): Record<string, unknown> {
     const accessToken = opaque('mcp_at');
     const refreshToken = opaque('mcp_rt');
@@ -743,6 +790,7 @@ export class OAuthProvider {
       scope,
       resource,
       grant_id: grantId,
+      subject,
       expires_at: now + this.options.accessTokenTtl * 1000,
       revoked: false,
       rotated: false,
@@ -754,6 +802,7 @@ export class OAuthProvider {
       scope,
       resource,
       grant_id: grantId,
+      subject,
       expires_at: now + this.options.refreshTokenTtl * 1000,
       revoked: false,
       rotated: false,
@@ -789,6 +838,7 @@ export class OAuthProvider {
       scopes: record.scope.split(' '),
       expiresAt: Math.floor(record.expires_at / 1000),
       resource: new URL(record.resource),
+      extra: record.subject && { provider: record.subject.provider, sub: record.subject.sub },
     };
   }
 
