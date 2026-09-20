@@ -205,7 +205,7 @@ export function subjectFromAuthInfo(
   extra: unknown,
 ): Pick<VerifiedIdentity, 'provider' | 'sub'> | undefined {
   const bag = extra as { provider?: unknown; sub?: unknown } | undefined;
-  if (!bag || typeof bag.provider !== 'string' || typeof bag.sub !== 'string') return undefined;
-  if (bag.provider !== 'github') return undefined;
-  return { provider: 'github', sub: bag.sub };
+  if (!bag || typeof bag.sub !== 'string') return undefined;
+  if (bag.provider !== 'github' && bag.provider !== 'google') return undefined;
+  return { provider: bag.provider, sub: bag.sub };
 }

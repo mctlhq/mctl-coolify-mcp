@@ -159,6 +159,13 @@ describe('subject from the verified token', () => {
     });
   });
 
+  it('accepts google, the second identity provider', () => {
+    expect(subjectFromAuthInfo({ provider: 'google', sub: '1001' })).toEqual({
+      provider: 'google',
+      sub: '1001',
+    });
+  });
+
   it('refuses anything else rather than guessing which tenant was meant', () => {
     // A token minted before subject binding, or by another provider, must not
     // be resolved to a tenant by inference — that is how two tenants cross.
