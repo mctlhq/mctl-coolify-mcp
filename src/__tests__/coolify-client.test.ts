@@ -1,4 +1,5 @@
-import { jest, describe, it, expect, beforeEach } from '@jest/globals';
+import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import * as http from 'node:http';
 import { CoolifyClient, errorHint, isRunningStatus } from '../lib/coolify-client.js';
 import type { ServiceType, CreateServiceRequest, EnvironmentVariable } from '../types/coolify.js';
 
@@ -7267,33 +7268,73 @@ describe('CoolifyClient dispatcher routing (multi-tenant DNS pinning)', () => {
   // `fetch()`. Handing one package's Dispatcher to the other's fetch throws
   // `UND_ERR_INVALID_ARG` on every call — 100% reproducible in production,
   // invisible to every other test in this file because none of them pass a
-  // real dispatcher through a real fetch. This asserts the client routes a
-  // dispatcher-bearing request through `undici`'s own `fetch`, never the
-  // global one, so the two can never be mixed again by accident.
-  const mockFetch = jest.fn<typeof fetch>();
+  // real dispatcher through a real fetch.
+  const globalFetch = jest.fn<typeof fetch>();
+  const originalFetch = global.fetch;
 
   beforeEach(() => {
-    mockFetch.mockClear();
-    global.fetch = mockFetch;
+    globalFetch.mockClear();
+    global.fetch = globalFetch;
   });
 
-  it('does not call the global fetch when a dispatcher is configured', async () => {
-    const client = new CoolifyClient({
-      baseUrl: 'https://coolify.example.com',
-      accessToken: 'test-token',
-      // A real Dispatcher instance is not required to prove the routing
-      // decision: undici's own fetch will reject this bare object before
-      // opening a socket, which is enough to show the call reached it
-      // instead of the mocked global fetch.
-      dispatcher: {} as unknown as import('undici').Dispatcher,
-    });
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
 
-    await expect(client.getVersion()).rejects.toBeDefined();
-    expect(mockFetch).not.toHaveBeenCalled();
+  it('routes a real Agent through a real fetch and actually dispatches on it', async () => {
+    // Both halves of the original bug together in one test, not the two
+    // shallow proxies a fake dispatcher and a fake fetch would give:
+    // - a real `undici` `Agent` (what `tenant-dispatcher.ts` builds), not a
+    //   stand-in `Dispatcher`-shaped object, meeting the client's real
+    //   `doFetch` — this is exactly the pairing that threw
+    //   `UND_ERR_INVALID_ARG` before the fix, and a fake object can't
+    //   reproduce an ABI mismatch between two real builds.
+    // - a spy on that Agent's own `dispatch`, so a regression that silently
+    //   drops `dispatcher` from the `undiciFetch` call (falling back to
+    //   undici's default, unpinned dispatcher — a fail-*open* DNS-rebinding
+    //   regression, not a loud one) fails this test even though the request
+    //   would still succeed.
+    const { Agent } = await import('undici');
+    const { pinnedLookup } = await import('../lib/ssrf.js');
+
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('4.3.12');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('node:net').AddressInfo).port;
+
+    // Built directly rather than through `pinnedDispatcherFor`, which would
+    // reject 127.0.0.1 as a private address — correct there, irrelevant
+    // here, where the point is pairing a real Agent with a real fetch.
+    const dispatcher = new Agent({
+      connect: { lookup: pinnedLookup([{ address: '127.0.0.1', family: 4 }]) },
+    });
+    const dispatchSpy = jest.spyOn(dispatcher, 'dispatch');
+
+    try {
+      const client = new CoolifyClient({
+        baseUrl: `http://coolify.invalid:${port}`,
+        accessToken: 'test-token',
+        dispatcher,
+      });
+
+      const version = await client.getVersion();
+
+      expect(version).toEqual({ version: '4.3.12' });
+      expect(dispatchSpy).toHaveBeenCalled();
+      // Never the global fetch: this request only ever reached the local
+      // server because the dispatcher pinned "coolify.invalid" to 127.0.0.1
+      // — a real DNS lookup for that host would fail.
+      expect(globalFetch).not.toHaveBeenCalled();
+    } finally {
+      dispatcher.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('still uses the global fetch when no dispatcher is configured', async () => {
-    mockFetch.mockResolvedValueOnce(mockResponse('4.3.12', true, 200, 'text/plain'));
+    globalFetch.mockResolvedValueOnce(mockResponse('4.3.12', true, 200, 'text/plain'));
     const client = new CoolifyClient({
       baseUrl: 'https://coolify.example.com',
       accessToken: 'test-token',
@@ -7301,6 +7342,6 @@ describe('CoolifyClient dispatcher routing (multi-tenant DNS pinning)', () => {
 
     const version = await client.getVersion();
     expect(version).toEqual({ version: '4.3.12' });
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(globalFetch).toHaveBeenCalledTimes(1);
   });
 });
