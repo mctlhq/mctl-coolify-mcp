@@ -7281,57 +7281,69 @@ describe('CoolifyClient dispatcher routing (multi-tenant DNS pinning)', () => {
     global.fetch = originalFetch;
   });
 
-  it('routes a real Agent through a real fetch and actually dispatches on it', async () => {
-    // Both halves of the original bug together in one test, not the two
-    // shallow proxies a fake dispatcher and a fake fetch would give:
-    // - a real `undici` `Agent` (what `tenant-dispatcher.ts` builds), not a
-    //   stand-in `Dispatcher`-shaped object, meeting the client's real
-    //   `doFetch` — this is exactly the pairing that threw
-    //   `UND_ERR_INVALID_ARG` before the fix, and a fake object can't
-    //   reproduce an ABI mismatch between two real builds.
-    // - a spy on that Agent's own `dispatch`, so a regression that silently
-    //   drops `dispatcher` from the `undiciFetch` call (falling back to
-    //   undici's default, unpinned dispatcher — a fail-*open* DNS-rebinding
-    //   regression, not a loud one) fails this test even though the request
-    //   would still succeed.
-    const { Agent } = await import('undici');
-    const { pinnedLookup } = await import('../lib/ssrf.js');
+  // The standalone `undici` package (8.x) requires Node >=22.19 (its
+  // `CacheStorage` shim needs `webidl.util.markAsUncloneable`, added in
+  // 22.19 — see tenant-dispatcher.ts's own deferred import for the same
+  // constraint). CI's Node 20.x leg would otherwise crash importing it here,
+  // for a test whose whole point is exercising that package specifically.
+  const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+  const supportsPackageUndici = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 19);
+  const itIfUndiciSupported = supportsPackageUndici ? it : it.skip;
 
-    const server = http.createServer((_req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('4.3.12');
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const port = (server.address() as import('node:net').AddressInfo).port;
+  itIfUndiciSupported(
+    'routes a real Agent through a real fetch and actually dispatches on it',
+    async () => {
+      // Both halves of the original bug together in one test, not the two
+      // shallow proxies a fake dispatcher and a fake fetch would give:
+      // - a real `undici` `Agent` (what `tenant-dispatcher.ts` builds), not a
+      //   stand-in `Dispatcher`-shaped object, meeting the client's real
+      //   `doFetch` — this is exactly the pairing that threw
+      //   `UND_ERR_INVALID_ARG` before the fix, and a fake object can't
+      //   reproduce an ABI mismatch between two real builds.
+      // - a spy on that Agent's own `dispatch`, so a regression that silently
+      //   drops `dispatcher` from the `undiciFetch` call (falling back to
+      //   undici's default, unpinned dispatcher — a fail-*open* DNS-rebinding
+      //   regression, not a loud one) fails this test even though the request
+      //   would still succeed.
+      const { Agent } = await import('undici');
+      const { pinnedLookup } = await import('../lib/ssrf.js');
 
-    // Built directly rather than through `pinnedDispatcherFor`, which would
-    // reject 127.0.0.1 as a private address — correct there, irrelevant
-    // here, where the point is pairing a real Agent with a real fetch.
-    const dispatcher = new Agent({
-      connect: { lookup: pinnedLookup([{ address: '127.0.0.1', family: 4 }]) },
-    });
-    const dispatchSpy = jest.spyOn(dispatcher, 'dispatch');
-
-    try {
-      const client = new CoolifyClient({
-        baseUrl: `http://coolify.invalid:${port}`,
-        accessToken: 'test-token',
-        dispatcher,
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('4.3.12');
       });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as import('node:net').AddressInfo).port;
 
-      const version = await client.getVersion();
+      // Built directly rather than through `pinnedDispatcherFor`, which would
+      // reject 127.0.0.1 as a private address — correct there, irrelevant
+      // here, where the point is pairing a real Agent with a real fetch.
+      const dispatcher = new Agent({
+        connect: { lookup: pinnedLookup([{ address: '127.0.0.1', family: 4 }]) },
+      });
+      const dispatchSpy = jest.spyOn(dispatcher, 'dispatch');
 
-      expect(version).toEqual({ version: '4.3.12' });
-      expect(dispatchSpy).toHaveBeenCalled();
-      // Never the global fetch: this request only ever reached the local
-      // server because the dispatcher pinned "coolify.invalid" to 127.0.0.1
-      // — a real DNS lookup for that host would fail.
-      expect(globalFetch).not.toHaveBeenCalled();
-    } finally {
-      dispatcher.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-  });
+      try {
+        const client = new CoolifyClient({
+          baseUrl: `http://coolify.invalid:${port}`,
+          accessToken: 'test-token',
+          dispatcher,
+        });
+
+        const version = await client.getVersion();
+
+        expect(version).toEqual({ version: '4.3.12' });
+        expect(dispatchSpy).toHaveBeenCalled();
+        // Never the global fetch: this request only ever reached the local
+        // server because the dispatcher pinned "coolify.invalid" to 127.0.0.1
+        // — a real DNS lookup for that host would fail.
+        expect(globalFetch).not.toHaveBeenCalled();
+      } finally {
+        dispatcher.close();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+  );
 
   it('still uses the global fetch when no dispatcher is configured', async () => {
     globalFetch.mockResolvedValueOnce(mockResponse('4.3.12', true, 200, 'text/plain'));
