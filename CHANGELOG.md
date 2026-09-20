@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-09-20
+
+### Added
+
+- **Google as a second identity provider for multi-tenant mode**, alongside GitHub — the plan for this fork always named both, and only GitHub shipped in 3.6.0. Set `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (callback `${MCP_PUBLIC_URL}/auth/google/callback`) to enable it; a deployment with only one provider's credentials behaves exactly as before, with no UI change, and `/authorize` redirects straight to it. Configuring both shows a "Continue with GitHub" / "Continue with Google" chooser on `/authorize` and `/enroll` instead. Tenants are keyed by `(provider, that provider's own immutable id)` — never by login or email, and never across providers, so the same person signing in with GitHub and with Google gets two separate tenant records by design. See `docs/multi-tenant.md`.
+
 ## [3.6.1] - 2026-09-20
 
 ### Fixed

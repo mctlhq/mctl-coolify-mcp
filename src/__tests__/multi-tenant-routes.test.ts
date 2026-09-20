@@ -22,9 +22,20 @@ const ISSUER = 'https://mcp.example.com';
 const CALLBACK = 'https://client.example.com/callback';
 
 const identity: IdentityConfig = {
-  clientId: 'gh-client-id',
-  clientSecret: 'gh-client-secret',
-  callbackUrl: `${ISSUER}/auth/github/callback`,
+  github: {
+    clientId: 'gh-client-id',
+    clientSecret: 'gh-client-secret',
+    callbackUrl: `${ISSUER}/auth/github/callback`,
+  },
+};
+
+const bothProvidersIdentity: IdentityConfig = {
+  ...identity,
+  google: {
+    clientId: 'g-client-id',
+    clientSecret: 'g-client-secret',
+    callbackUrl: `${ISSUER}/auth/google/callback`,
+  },
 };
 
 function pkcePair(): { verifier: string; challenge: string } {
@@ -56,10 +67,33 @@ function mockGithub(users: Record<string, { id: number; login: string }>): void 
   }) as typeof fetch;
 }
 
+/** Stands in for Google's two-leg OIDC exchange, keyed by the fake `code` presented. */
+function mockGoogle(users: Record<string, { sub: string; email: string }>): void {
+  global.fetch = jest.fn(async (input: unknown, init?: unknown) => {
+    const url = String(input);
+    if (url === 'https://oauth2.googleapis.com/token') {
+      const body = new URLSearchParams((init as { body?: string })?.body ?? '');
+      const code = body.get('code') ?? '';
+      if (!(code in users)) {
+        return new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ access_token: `ya29_${code}` }));
+    }
+    if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      const auth = (init as { headers?: Record<string, string> })?.headers?.authorization ?? '';
+      const code = auth.replace('Bearer ya29_', '');
+      const user = users[code];
+      return new Response(JSON.stringify(user ?? {}), { status: user ? 200 : 404 });
+    }
+    throw new Error(`unexpected fetch in test: ${url}`);
+  }) as typeof fetch;
+}
+
 function makeApp(
   overrides: {
     store?: MemoryTenantStore;
     probe?: (baseUrl: string, token: string) => Promise<ProbeResult>;
+    identity?: IdentityConfig;
   } = {},
 ): { app: ReturnType<typeof createHttpApp>; store: MemoryTenantStore } {
   const store = overrides.store ?? new MemoryTenantStore();
@@ -71,7 +105,7 @@ function makeApp(
     readonly: false,
     tenancy: {
       store,
-      identity,
+      identity: overrides.identity ?? identity,
       probe:
         overrides.probe ?? (async () => ({ ok: true, teamName: 'Acme' }) satisfies ProbeResult),
     },
@@ -130,6 +164,99 @@ describe('GET /authorize in multi-tenant mode', () => {
     const response = await app.fetch(new Request(`${ISSUER}/authorize?client_id=unknown-client`));
     expect(response.status).toBe(400);
     expect(response.headers.get('location')).toBeNull();
+  });
+
+  it('shows a chooser instead of redirecting when more than one provider is configured', async () => {
+    const { app } = makeApp({ identity: bothProvidersIdentity });
+    const clientId = await registerClient(app);
+    const { challenge } = pkcePair();
+    const response = await app.fetch(
+      new Request(
+        `${ISSUER}/authorize?${new URLSearchParams({
+          client_id: clientId,
+          redirect_uri: CALLBACK,
+          response_type: 'code',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        })}`,
+      ),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('Continue with GitHub');
+    expect(body).toContain('Continue with Google');
+    const githubHref = /href="([^"]*)">Continue with GitHub/.exec(body)![1].replace(/&amp;/g, '&');
+    const googleHref = /href="([^"]*)">Continue with Google/.exec(body)![1].replace(/&amp;/g, '&');
+    expect(new URL(githubHref).origin + new URL(githubHref).pathname).toBe(
+      'https://github.com/login/oauth/authorize',
+    );
+    expect(new URL(googleHref).origin + new URL(googleHref).pathname).toBe(
+      'https://accounts.google.com/o/oauth2/v2/auth',
+    );
+    // Both links carry the same parked-request state, so completing either
+    // finishes the same OAuth request.
+    expect(new URL(githubHref).searchParams.get('state')).toBe(
+      new URL(googleHref).searchParams.get('state'),
+    );
+  });
+});
+
+describe('Google as the identity provider', () => {
+  it('signs in via /auth/google/callback and completes the parked OAuth request', async () => {
+    mockGoogle({ 'the-code': { sub: '110169484474386276334', email: 'person@example.com' } });
+    const { app, store } = makeApp({ identity: bothProvidersIdentity });
+    const clientId = await registerClient(app);
+    const { challenge } = pkcePair();
+
+    const authorize = await app.fetch(
+      new Request(
+        `${ISSUER}/authorize?${new URLSearchParams({
+          client_id: clientId,
+          redirect_uri: CALLBACK,
+          response_type: 'code',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        })}`,
+      ),
+    );
+    const chooserHtml = await authorize.text();
+    const googleHref = /href="([^"]*)">Continue with Google/
+      .exec(chooserHtml)![1]
+      .replace(/&amp;/g, '&');
+    const state = new URL(googleHref).searchParams.get('state')!;
+
+    const callback = await app.fetch(
+      new Request(
+        `${ISSUER}/auth/google/callback?${new URLSearchParams({ code: 'the-code', state })}`,
+      ),
+    );
+    expect(callback.status).toBe(200);
+    const enrollHtml = await callback.text();
+    expect(enrollHtml).toContain('person@example.com');
+    const continueState = extractHidden(enrollHtml, 'continue');
+
+    const enroll = await app.fetch(
+      new Request(`${ISSUER}/enroll`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          continue: continueState,
+          name: 'prod',
+          base_url: 'https://coolify.example.com',
+          token: 'tok',
+        }).toString(),
+      }),
+    );
+    expect(enroll.status).toBe(302);
+    const location = new URL(enroll.headers.get('location')!);
+    expect(location.origin + location.pathname).toBe(CALLBACK);
+    expect(location.searchParams.get('code')).toBeTruthy();
+
+    const record = await store.read({ provider: 'google', sub: '110169484474386276334' });
+    expect(record?.instances[0]).toMatchObject({
+      name: 'prod',
+      baseUrl: 'https://coolify.example.com',
+    });
   });
 });
 

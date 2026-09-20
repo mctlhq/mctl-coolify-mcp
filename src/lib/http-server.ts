@@ -19,6 +19,7 @@ import { OAuthProvider, OAuthErrorResponse, isClientIdUrl } from './oauth.js';
 import type { CoolifyConfig } from '../types/coolify.js';
 import type { InstanceRegistry } from './instances.js';
 import {
+  configuredProviders,
   exchangeCodeForIdentity,
   loginRedirectUrl,
   openEnrolmentTicket,
@@ -27,6 +28,7 @@ import {
   sealLoginState,
   IdentityError,
   type IdentityConfig,
+  type Provider,
   type VerifiedIdentity,
 } from './identity.js';
 import {
@@ -291,6 +293,41 @@ function authorizePage(params: URLSearchParams, clientName: string, error?: stri
 </html>`;
 }
 
+const PROVIDER_LABEL: Record<Provider, string> = { github: 'GitHub', google: 'Google' };
+
+/**
+ * Shown only when a deployment configures more than one identity provider.
+ * The links go straight to `loginRedirectUrl`'s output — a server-computed
+ * redirect, not user input — so there is nothing here for an open-redirect
+ * check to guard against.
+ */
+function loginChooserPage(identity: IdentityConfig, providers: Provider[], state: string): string {
+  const links = providers
+    .map(
+      (provider) =>
+        `<a class="provider" href="${escapeHtml(loginRedirectUrl(identity, provider, state))}">Continue with ${PROVIDER_LABEL[provider]}</a>`,
+    )
+    .join('\n      ');
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 22rem; margin: 16vh auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.2rem; }
+    .provider { display: block; text-align: center; margin-top: 1rem; padding: 0.7rem; font-size: 1rem; border: 1px solid #bbb; border-radius: 6px; color: #1a1a1a; text-decoration: none; }
+    .provider:hover { background: #f4f4f4; }
+  </style>
+</head>
+<body>
+  <h1>Sign in to continue</h1>
+  ${links}
+</body>
+</html>`;
+}
+
 export function createHttpApp(config: HttpServerConfig): {
   fetch: (request: Request) => Promise<Response>;
   provider: OAuthProvider;
@@ -449,9 +486,12 @@ export function createHttpApp(config: HttpServerConfig): {
         if (config.tenancy) {
           // Validated before we leave: a malformed redirect_uri must be
           // rejected here, not after a round trip through the provider.
-          return redirect(
-            loginRedirectUrl(config.tenancy.identity, sealLoginState(url.searchParams.toString())),
-          );
+          const state = sealLoginState(url.searchParams.toString());
+          const providers = configuredProviders(config.tenancy.identity);
+          if (providers.length === 1) {
+            return redirect(loginRedirectUrl(config.tenancy.identity, providers[0], state));
+          }
+          return html(loginChooserPage(config.tenancy.identity, providers, state));
         }
         return html(
           authorizePage(url.searchParams, validated.client.client_name ?? 'An MCP client'),
@@ -531,7 +571,13 @@ export function createHttpApp(config: HttpServerConfig): {
     // at all in single-tenant mode.
     // =========================================================================
 
-    if (config.tenancy && path === '/auth/github/callback' && request.method === 'GET') {
+    const callbackProvider: Provider | undefined =
+      path === '/auth/github/callback'
+        ? 'github'
+        : path === '/auth/google/callback'
+          ? 'google'
+          : undefined;
+    if (config.tenancy && callbackProvider && request.method === 'GET') {
       if (!authLimiter.allow(`cb:${clientIp}`)) {
         return html('<p>Too many attempts. Try again in a minute.</p>', 429);
       }
@@ -549,6 +595,7 @@ export function createHttpApp(config: HttpServerConfig): {
       try {
         identity = await exchangeCodeForIdentity(
           config.tenancy.identity,
+          callbackProvider,
           url.searchParams.get('code') ?? '',
         );
       } catch (error) {
@@ -594,7 +641,12 @@ export function createHttpApp(config: HttpServerConfig): {
       // No identity yet, so this is a login with nothing to complete
       // afterwards; the callback recognises the empty request and shows the
       // management page.
-      return redirect(loginRedirectUrl(config.tenancy.identity, sealLoginState('')));
+      const state = sealLoginState('');
+      const providers = configuredProviders(config.tenancy.identity);
+      if (providers.length === 1) {
+        return redirect(loginRedirectUrl(config.tenancy.identity, providers[0], state));
+      }
+      return html(loginChooserPage(config.tenancy.identity, providers, state));
     }
 
     if (config.tenancy && path === '/enroll' && request.method === 'POST') {

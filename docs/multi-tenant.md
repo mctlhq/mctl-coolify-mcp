@@ -30,11 +30,11 @@ person.
 
 |                                    | Single-tenant (`MCP_TENANCY=single`, the default)         | Multi-tenant (`MCP_TENANCY=multi`)                                                           |
 | ---------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Who the OAuth flow authenticates   | Whoever can prove they hold the container's Coolify token | Whoever can sign in with GitHub                                                              |
+| Who the OAuth flow authenticates   | Whoever can prove they hold the container's Coolify token | Whoever can sign in with GitHub and/or Google (whichever the deployment configures)          |
 | Whose Coolify a tool call reaches  | The one in `COOLIFY_BASE_URL` / `COOLIFY_INSTANCES`       | Whichever the signed-in caller enrolled                                                      |
 | Where the Coolify credential lives | Container environment                                     | Vault, keyed by the caller, entered once through `/enroll`                                   |
-| `/authorize`                       | Asks for a Coolify token                                  | Redirects to GitHub                                                                          |
-| New routes                         | —                                                         | `/enroll`, `/auth/github/callback`, `/enroll/revoke`                                         |
+| `/authorize`                       | Asks for a Coolify token                                  | Redirects to the identity provider (or shows a chooser if both are configured)               |
+| New routes                         | —                                                         | `/enroll`, `/auth/github/callback`, `/auth/google/callback`, `/enroll/revoke`                |
 | OAuth state persistence            | A file on a mounted volume (`MCP_OAUTH_STATE_FILE`)       | The same file, but under `/tmp`, mirrored to Vault so it survives a restart without a volume |
 
 Everything else — the 45 tools, PKCE, CIMD/DCR client registration, the
@@ -47,11 +47,25 @@ caller differs.
 
 You need:
 
-- A **GitHub OAuth App** (Settings → Developer settings → OAuth Apps →
-  New OAuth App). Set its callback URL to `${MCP_PUBLIC_URL}/auth/github/callback`
-  — the server prints the exact value it expects if you start it without one
-  configured. No scopes are requested at sign-in; the app only needs to name
-  who is signing in.
+- **At least one identity provider**, configured with its OAuth
+  client id/secret:
+  - **GitHub OAuth App** (Settings → Developer settings → OAuth Apps → New
+    OAuth App). Callback URL `${MCP_PUBLIC_URL}/auth/github/callback`. No
+    scopes are requested at sign-in; the app only needs to name who is
+    signing in.
+  - **Google OAuth client** (Google Cloud Console → APIs & Services →
+    Credentials → OAuth client ID → Web application). Add
+    `${MCP_PUBLIC_URL}/auth/google/callback` as an authorized redirect URI.
+    Requests `openid email` only — not `profile` — since an address is all
+    this server needs to display.
+
+  Configuring both is not required: a deployment with only one set of
+  credentials behaves exactly as if the other provider did not exist, and
+  `/authorize` redirects straight to it with no chooser shown. Configure both
+  and `/authorize` shows a two-button "Continue with GitHub" / "Continue with
+  Google" page instead. Either way, the server prints exactly which
+  credentials it is missing if you start it without any configured.
+
 - A **Vault KV v2 mount** the container can reach, with `max_versions=1` (see
   [why](#why-max_versions1), below), and a policy that lets the container's
   identity read and write under it. Kubernetes auth is what this fork's own
@@ -64,6 +78,10 @@ MCP_PUBLIC_URL=https://coolify-mcp.example.com
 
 GITHUB_CLIENT_ID=...
 GITHUB_CLIENT_SECRET=...
+
+# Optional second provider. Omit both lines to offer GitHub only.
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
 
 VAULT_ADDR=https://vault.example.com
 VAULT_KV_MOUNT=coolify-mcp-users
@@ -78,15 +96,24 @@ MCP_EGRESS_ADDRESSES=203.0.113.10,203.0.113.11
 
 Notice `COOLIFY_BASE_URL` and `COOLIFY_ACCESS_TOKEN` are **absent**: the
 operator of a multi-tenant server need not own a Coolify at all. The server
-refuses to start without `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` and
+refuses to start unless at least one of `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`
+or `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` is set, along with
 `VAULT_ADDR`/`VAULT_KV_MOUNT`, naming exactly what is missing, rather than
 booting and failing the first person who tries to connect.
+
+Whichever provider a tenant used, tenants are keyed by `(provider, provider's
+own immutable id)` — GitHub's numeric user id, Google's OIDC `sub` — never by
+login or email, and never across providers: the same person signing in with
+GitHub once and Google another time gets two separate tenant records, by
+design. There is no account-linking step.
 
 ## What a tenant does
 
 1. Add the server as a custom connector in claude.ai (or any MCP client) at
    `https://coolify-mcp.example.com/mcp`, same as upstream.
-2. Instead of a Coolify-token form, `/authorize` sends them to GitHub.
+2. Instead of a Coolify-token form, `/authorize` sends them to the configured
+   identity provider — or, with both configured, to a page asking them to
+   pick one.
 3. First time through, they land on `/enroll`: a name for the instance
    (`default` unless they run more than one), their Coolify's address, and a
    Coolify API token created under **Keys & Tokens → API tokens**. The page

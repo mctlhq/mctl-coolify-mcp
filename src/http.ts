@@ -193,8 +193,10 @@ async function main(): Promise<void> {
     const vaultConfig = vaultFromEnv(process.env);
     if (!identity) {
       problems.push(
-        'MCP_TENANCY=multi needs GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET. Create an OAuth app ' +
-          `with the callback ${publicUrl || 'https://your-domain'}/auth/github/callback`,
+        'MCP_TENANCY=multi needs at least one identity provider: GITHUB_CLIENT_ID + ' +
+          'GITHUB_CLIENT_SECRET (callback: ' +
+          `${publicUrl || 'https://your-domain'}/auth/github/callback), and/or GOOGLE_CLIENT_ID ` +
+          `+ GOOGLE_CLIENT_SECRET (callback: ${publicUrl || 'https://your-domain'}/auth/google/callback)`,
       );
     }
     if (!vaultConfig) {

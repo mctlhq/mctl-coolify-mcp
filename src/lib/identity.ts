@@ -22,19 +22,39 @@
  * record says *what they may reach*. Keeping the two apart is what stops a
  * login from ever implying access to an instance.
  *
- * ## Why GitHub, and why the numeric id
+ * ## Why GitHub and Google, and why an immutable id
  *
- * The subject is GitHub's **numeric user id**, never the login. Logins are
- * renameable and, once freed, claimable by someone else — keying tenants on
- * one would silently hand a tenant's stored Coolify token to whoever picked up
- * their abandoned handle. The id is immutable for the life of the account.
+ * The subject is each provider's own immutable identifier — GitHub's numeric
+ * user id, Google's OIDC `sub` — never a login or email. GitHub logins are
+ * renameable and, once freed, claimable by someone else; Google addresses can
+ * be repurposed too. Keying tenants on either would silently hand a tenant's
+ * stored Coolify token to whoever next picked up the identifier. `login`
+ * (GitHub username, or Google email) rides along for display and audit only
+ * and is never used as a key.
+ *
+ * ## Why two providers share one module
+ *
+ * Both are the same three-step shape — redirect to the provider, exchange a
+ * code for an access token, spend that token once on a profile lookup — so
+ * `IdentityConfig` holds credentials per provider and `loginRedirectUrl` /
+ * `exchangeCodeForIdentity` take a `Provider` to say which. A deployment can
+ * configure one or both; `/authorize` shows a chooser only when more than one
+ * is actually configured, so a single-provider deployment (this server's own
+ * GitHub-only instance, today) sees no UI change at all.
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+
+export type Provider = 'github' | 'google';
 
 /** GitHub's OAuth endpoints. Fixed hosts, so no SSRF guard is warranted here. */
 const GITHUB_AUTHORIZE = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN = 'https://github.com/login/oauth/access_token';
 const GITHUB_USER = 'https://api.github.com/user';
+
+/** Google's OIDC endpoints. Fixed hosts, same reasoning as GitHub's above. */
+const GOOGLE_AUTHORIZE = 'https://accounts.google.com/o/oauth2/v2/auth';
+const GOOGLE_TOKEN = 'https://oauth2.googleapis.com/token';
+const GOOGLE_USERINFO = 'https://openidconnect.googleapis.com/v1/userinfo';
 
 /**
  * How long a login may take from `/authorize` to the callback. Long enough for
@@ -53,20 +73,31 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 /** Network budget for each leg of the exchange. */
 const FETCH_TIMEOUT_MS = 10_000;
 
-export interface IdentityConfig {
+export interface ProviderCredentials {
   clientId: string;
   clientSecret: string;
-  /** Absolute URL GitHub redirects back to, i.e. `${publicUrl}/auth/github/callback`. */
+  /** Absolute URL the provider redirects back to, e.g. `${publicUrl}/auth/github/callback`. */
   callbackUrl: string;
+}
+
+/** Per-provider credentials. A deployment configures one or both. */
+export interface IdentityConfig {
+  github?: ProviderCredentials;
+  google?: ProviderCredentials;
 }
 
 /** The verified human. `sub` is what tenant records are keyed by. */
 export interface VerifiedIdentity {
-  provider: 'github';
-  /** GitHub's immutable numeric user id, as a string. Never the login. */
+  provider: Provider;
+  /** The provider's immutable id, as a string. Never the login/email. */
   sub: string;
-  /** Current login, carried for display and audit only — never used as a key. */
+  /** Current login (GitHub) or email (Google), display/audit only — never a key. */
   login: string;
+}
+
+/** Which providers a deployment has actually configured, in a stable order. */
+export function configuredProviders(config: IdentityConfig): Provider[] {
+  return (['github', 'google'] as const).filter((provider) => config[provider] !== undefined);
 }
 
 export class IdentityError extends Error {
@@ -77,20 +108,33 @@ export class IdentityError extends Error {
 }
 
 /**
- * Read the identity provider's credentials from the environment.
+ * Read the configured identity providers' credentials from the environment.
  *
- * Returns `undefined` when unconfigured rather than throwing, so single-tenant
+ * Returns `undefined` when NEITHER provider is configured, so single-tenant
  * mode — which needs no identity provider at all — boots unchanged. Multi
- * mode's startup check is what turns absence into a refusal to start.
+ * mode's startup check is what turns absence into a refusal to start; one
+ * provider configured is enough, the other is simply not offered.
  */
 export function identityFromEnv(
   env: NodeJS.ProcessEnv,
   publicUrl: string,
 ): IdentityConfig | undefined {
-  const clientId = env.GITHUB_CLIENT_ID?.trim();
-  const clientSecret = env.GITHUB_CLIENT_SECRET?.trim();
+  const github = providerCredentialsFromEnv(env, 'GITHUB', 'github', publicUrl);
+  const google = providerCredentialsFromEnv(env, 'GOOGLE', 'google', publicUrl);
+  if (!github && !google) return undefined;
+  return { github, google };
+}
+
+function providerCredentialsFromEnv(
+  env: NodeJS.ProcessEnv,
+  envPrefix: 'GITHUB' | 'GOOGLE',
+  provider: Provider,
+  publicUrl: string,
+): ProviderCredentials | undefined {
+  const clientId = env[`${envPrefix}_CLIENT_ID`]?.trim();
+  const clientSecret = env[`${envPrefix}_CLIENT_SECRET`]?.trim();
   if (!clientId || !clientSecret) return undefined;
-  return { clientId, clientSecret, callbackUrl: `${publicUrl}/auth/github/callback` };
+  return { clientId, clientSecret, callbackUrl: `${publicUrl}/auth/${provider}/callback` };
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +276,7 @@ export function openEnrolmentTicket(value: string): {
 } {
   const claims = openTicket(value);
   if (
-    claims.provider !== 'github' ||
+    (claims.provider !== 'github' && claims.provider !== 'google') ||
     typeof claims.sub !== 'string' ||
     typeof claims.login !== 'string' ||
     typeof claims.q !== 'string'
@@ -240,7 +284,7 @@ export function openEnrolmentTicket(value: string): {
     throw new IdentityError('The enrolment session is malformed. Start again.');
   }
   return {
-    identity: { provider: 'github', sub: claims.sub, login: claims.login },
+    identity: { provider: claims.provider, sub: claims.sub, login: claims.login },
     query: claims.q,
   };
 }
@@ -250,21 +294,47 @@ export function openEnrolmentTicket(value: string): {
 // ---------------------------------------------------------------------------
 
 /**
- * Where to send the browser to log in.
+ * Where to send the browser to log in with the given provider.
  *
- * No scopes are requested. We want a name, not access: an unscoped GitHub
- * token reads public profile data and nothing else, so a compromise of this
- * server cannot turn into a compromise of anyone's repositories.
+ * Scopes are kept to the minimum each provider requires to name a person: none
+ * for GitHub (an unscoped token reads public profile data and nothing else, so
+ * a compromise of this server cannot turn into a compromise of anyone's
+ * repositories), `openid email` for Google (`openid` is mandatory to get a
+ * `sub` at all; `email` is the closest Google analog to GitHub's login, for
+ * display — `profile` is deliberately not requested, since name/picture are
+ * not needed for anything here).
  */
-export function loginRedirectUrl(config: IdentityConfig, state: string): string {
+export function loginRedirectUrl(
+  config: IdentityConfig,
+  provider: Provider,
+  state: string,
+): string {
+  const creds = config[provider];
+  if (!creds) throw new IdentityError(`${provider} login is not configured on this server.`);
+
+  if (provider === 'github') {
+    const params = new URLSearchParams({
+      client_id: creds.clientId,
+      redirect_uri: creds.callbackUrl,
+      state,
+      scope: '',
+      allow_signup: 'false',
+    });
+    return `${GITHUB_AUTHORIZE}?${params.toString()}`;
+  }
+
   const params = new URLSearchParams({
-    client_id: config.clientId,
-    redirect_uri: config.callbackUrl,
+    client_id: creds.clientId,
+    redirect_uri: creds.callbackUrl,
     state,
-    scope: '',
-    allow_signup: 'false',
+    scope: 'openid email',
+    response_type: 'code',
+    // Always show the account chooser rather than silently reusing whatever
+    // Google session happens to be active in the browser — the person
+    // completing this flow should always see, and confirm, which account.
+    prompt: 'select_account',
   });
-  return `${GITHUB_AUTHORIZE}?${params.toString()}`;
+  return `${GOOGLE_AUTHORIZE}?${params.toString()}`;
 }
 
 async function readCapped(response: Response): Promise<string> {
@@ -278,25 +348,33 @@ async function readCapped(response: Response): Promise<string> {
 /**
  * Exchange the callback's `code` for the caller's identity.
  *
- * Two legs, both against fixed GitHub hosts: the code becomes an access token,
- * the access token names a user. The token is used for that one request and
- * then dropped — it is never stored, never returned and never used to act,
- * which is the same property upstream gives the Coolify token it validates.
+ * Two legs, both against a fixed provider host: the code becomes an access
+ * token, the access token names a user. The token is used for that one
+ * request and then dropped — it is never stored, never returned and never
+ * used to act, which is the same property upstream gives the Coolify token it
+ * validates.
  */
 export async function exchangeCodeForIdentity(
   config: IdentityConfig,
+  provider: Provider,
   code: string,
 ): Promise<VerifiedIdentity> {
+  const creds = config[provider];
+  if (!creds) throw new IdentityError(`${provider} login is not configured on this server.`);
   if (!code) throw new IdentityError('The identity provider returned no authorization code.');
 
+  return provider === 'github' ? exchangeGithub(creds, code) : exchangeGoogle(creds, code);
+}
+
+async function exchangeGithub(creds: ProviderCredentials, code: string): Promise<VerifiedIdentity> {
   const tokenResponse = await fetch(GITHUB_TOKEN, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
+      client_id: creds.clientId,
+      client_secret: creds.clientSecret,
       code,
-      redirect_uri: config.callbackUrl,
+      redirect_uri: creds.callbackUrl,
     }).toString(),
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   }).catch(() => {
@@ -343,4 +421,60 @@ export async function exchangeCodeForIdentity(
   }
 
   return { provider: 'github', sub: String(profile.id), login: profile.login };
+}
+
+async function exchangeGoogle(creds: ProviderCredentials, code: string): Promise<VerifiedIdentity> {
+  const tokenResponse = await fetch(GOOGLE_TOKEN, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: creds.clientId,
+      client_secret: creds.clientSecret,
+      code,
+      redirect_uri: creds.callbackUrl,
+      grant_type: 'authorization_code',
+    }).toString(),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  }).catch(() => {
+    throw new IdentityError('Could not reach the identity provider. Try again.');
+  });
+
+  if (!tokenResponse.ok) throw new IdentityError('The identity provider rejected the login.');
+
+  let token: unknown;
+  try {
+    token = JSON.parse(await readCapped(tokenResponse));
+  } catch {
+    throw new IdentityError('The identity provider returned an unreadable response.');
+  }
+  const parsed = token as { access_token?: unknown };
+  if (typeof parsed.access_token !== 'string' || parsed.access_token === '') {
+    throw new IdentityError('The identity provider did not issue a token.');
+  }
+
+  // The OIDC userinfo endpoint, not id_token verification: this codebase
+  // already trusts a provider host directly (GitHub's /user is the same
+  // shape) rather than carrying a JWKS/JWT-verification dependency for one
+  // profile lookup that is used once and then thrown away.
+  const userResponse = await fetch(GOOGLE_USERINFO, {
+    headers: { authorization: `Bearer ${parsed.access_token}` },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  }).catch(() => {
+    throw new IdentityError('Could not reach the identity provider. Try again.');
+  });
+
+  if (!userResponse.ok) throw new IdentityError('The identity provider would not name the user.');
+
+  let user: unknown;
+  try {
+    user = JSON.parse(await readCapped(userResponse));
+  } catch {
+    throw new IdentityError('The identity provider returned an unreadable profile.');
+  }
+  const profile = user as { sub?: unknown; email?: unknown };
+  if (typeof profile.sub !== 'string' || profile.sub === '' || typeof profile.email !== 'string') {
+    throw new IdentityError('The identity provider returned an unusable profile.');
+  }
+
+  return { provider: 'google', sub: profile.sub, login: profile.email };
 }

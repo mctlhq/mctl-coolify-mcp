@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import {
   IdentityError,
+  configuredProviders,
   exchangeCodeForIdentity,
   identityFromEnv,
   loginRedirectUrl,
@@ -9,11 +10,19 @@ import {
   type IdentityConfig,
 } from '../lib/identity.js';
 
-const config: IdentityConfig = {
+const githubCreds = {
   clientId: 'Iv1.deadbeef',
   clientSecret: 'shhh',
   callbackUrl: 'https://coolify.mctl.ai/auth/github/callback',
 };
+const config: IdentityConfig = { github: githubCreds };
+
+const googleCreds = {
+  clientId: 'g-client.apps.googleusercontent.com',
+  clientSecret: 'g-shhh',
+  callbackUrl: 'https://coolify.mctl.ai/auth/google/callback',
+};
+const bothConfig: IdentityConfig = { github: githubCreds, google: googleCreds };
 
 /** A fixed key, so sealing and opening agree without relying on the generated fallback. */
 const KEY = 'k'.repeat(48);
@@ -40,7 +49,37 @@ describe('identity configuration', () => {
       { GITHUB_CLIENT_ID: ' Iv1.deadbeef ', GITHUB_CLIENT_SECRET: ' shhh ' },
       'https://coolify.mctl.ai',
     );
-    expect(resolved).toEqual(config);
+    expect(resolved).toEqual({ github: githubCreds, google: undefined });
+  });
+
+  it('configures either provider independently, and both together', () => {
+    expect(
+      identityFromEnv(
+        { GOOGLE_CLIENT_ID: googleCreds.clientId, GOOGLE_CLIENT_SECRET: googleCreds.clientSecret },
+        'https://coolify.mctl.ai',
+      ),
+    ).toEqual({ github: undefined, google: googleCreds });
+
+    expect(
+      identityFromEnv(
+        {
+          GITHUB_CLIENT_ID: githubCreds.clientId,
+          GITHUB_CLIENT_SECRET: githubCreds.clientSecret,
+          GOOGLE_CLIENT_ID: googleCreds.clientId,
+          GOOGLE_CLIENT_SECRET: googleCreds.clientSecret,
+        },
+        'https://coolify.mctl.ai',
+      ),
+    ).toEqual(bothConfig);
+  });
+});
+
+describe('configured providers', () => {
+  it('lists only what is actually configured, github before google', () => {
+    expect(configuredProviders(config)).toEqual(['github']);
+    expect(configuredProviders({ google: googleCreds })).toEqual(['google']);
+    expect(configuredProviders(bothConfig)).toEqual(['github', 'google']);
+    expect(configuredProviders({})).toEqual([]);
   });
 });
 
@@ -89,13 +128,28 @@ describe('login state', () => {
 });
 
 describe('login redirect', () => {
-  it('asks for no scopes, because we want a name and not access', () => {
-    const url = new URL(loginRedirectUrl(config, 'state-value'));
+  it('asks GitHub for no scopes, because we want a name and not access', () => {
+    const url = new URL(loginRedirectUrl(config, 'github', 'state-value'));
     expect(url.origin + url.pathname).toBe('https://github.com/login/oauth/authorize');
     expect(url.searchParams.get('scope')).toBe('');
-    expect(url.searchParams.get('client_id')).toBe(config.clientId);
-    expect(url.searchParams.get('redirect_uri')).toBe(config.callbackUrl);
+    expect(url.searchParams.get('client_id')).toBe(githubCreds.clientId);
+    expect(url.searchParams.get('redirect_uri')).toBe(githubCreds.callbackUrl);
     expect(url.searchParams.get('state')).toBe('state-value');
+  });
+
+  it('asks Google for openid + email only, not profile', () => {
+    const url = new URL(loginRedirectUrl(bothConfig, 'google', 'state-value'));
+    expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(url.searchParams.get('scope')).toBe('openid email');
+    expect(url.searchParams.get('client_id')).toBe(googleCreds.clientId);
+    expect(url.searchParams.get('redirect_uri')).toBe(googleCreds.callbackUrl);
+    expect(url.searchParams.get('state')).toBe('state-value');
+  });
+
+  it('refuses to build a link for a provider that is not configured', () => {
+    expect(() => loginRedirectUrl(config, 'google', 'state-value')).toThrow(
+      /google login is not configured/,
+    );
   });
 });
 
@@ -117,7 +171,7 @@ describe('code exchange', () => {
       { body: { access_token: 'gho_x' } },
       { body: { id: 583231, login: 'octocat', name: 'The Octocat' } },
     );
-    await expect(exchangeCodeForIdentity(config, 'the-code')).resolves.toEqual({
+    await expect(exchangeCodeForIdentity(config, 'github', 'the-code')).resolves.toEqual({
       provider: 'github',
       sub: '583231',
       login: 'octocat',
@@ -126,7 +180,7 @@ describe('code exchange', () => {
 
   it('does not carry the provider token out of the module', async () => {
     mockFetch({ body: { access_token: 'gho_secret' } }, { body: { id: 1, login: 'a' } });
-    const identity = await exchangeCodeForIdentity(config, 'the-code');
+    const identity = await exchangeCodeForIdentity(config, 'github', 'the-code');
     expect(JSON.stringify(identity)).not.toContain('gho_secret');
   });
 
@@ -134,30 +188,78 @@ describe('code exchange', () => {
     // GitHub answers 200 with `error` rather than a 4xx, so a status check
     // alone would accept this.
     mockFetch({ body: { error: 'bad_verification_code' } });
-    await expect(exchangeCodeForIdentity(config, 'stale')).rejects.toThrow(/did not issue a token/);
+    await expect(exchangeCodeForIdentity(config, 'github', 'stale')).rejects.toThrow(
+      /did not issue a token/,
+    );
   });
 
   it('refuses a profile without a numeric id', async () => {
     mockFetch({ body: { access_token: 'gho_x' } }, { body: { login: 'octocat' } });
-    await expect(exchangeCodeForIdentity(config, 'the-code')).rejects.toThrow(/unusable profile/);
+    await expect(exchangeCodeForIdentity(config, 'github', 'the-code')).rejects.toThrow(
+      /unusable profile/,
+    );
   });
 
   it('refuses an empty code without calling out', async () => {
     const fetchMock = mockFetch();
-    await expect(exchangeCodeForIdentity(config, '')).rejects.toThrow(/no authorization code/);
+    await expect(exchangeCodeForIdentity(config, 'github', '')).rejects.toThrow(
+      /no authorization code/,
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('reports an unreachable provider as such', async () => {
     const fetchMock = jest.fn<() => Promise<never>>().mockRejectedValue(new Error('ECONNREFUSED'));
     global.fetch = fetchMock as unknown as typeof fetch;
-    await expect(exchangeCodeForIdentity(config, 'the-code')).rejects.toThrow(/Could not reach/);
+    await expect(exchangeCodeForIdentity(config, 'github', 'the-code')).rejects.toThrow(
+      /Could not reach/,
+    );
   });
 
   it('refuses an implausibly large response instead of holding it', async () => {
     mockFetch({ body: 'x'.repeat(70 * 1024) });
-    await expect(exchangeCodeForIdentity(config, 'the-code')).rejects.toThrow(
+    await expect(exchangeCodeForIdentity(config, 'github', 'the-code')).rejects.toThrow(
       /implausibly large|unreadable/,
     );
+  });
+
+  it('refuses to exchange for a provider that is not configured', async () => {
+    const fetchMock = mockFetch();
+    await expect(exchangeCodeForIdentity(config, 'google', 'the-code')).rejects.toThrow(
+      /google login is not configured/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe('google', () => {
+    it('returns the OIDC sub as the subject and the email as the display login', async () => {
+      mockFetch(
+        { body: { access_token: 'ya29.x' } },
+        {
+          body: { sub: '110169484474386276334', email: 'person@example.com', email_verified: true },
+        },
+      );
+      await expect(exchangeCodeForIdentity(bothConfig, 'google', 'the-code')).resolves.toEqual({
+        provider: 'google',
+        sub: '110169484474386276334',
+        login: 'person@example.com',
+      });
+    });
+
+    it('refuses a profile missing sub or email', async () => {
+      mockFetch({ body: { access_token: 'ya29.x' } }, { body: { email: 'person@example.com' } });
+      await expect(exchangeCodeForIdentity(bothConfig, 'google', 'the-code')).rejects.toThrow(
+        /unusable profile/,
+      );
+    });
+
+    it('does not carry the provider token out of the module', async () => {
+      mockFetch(
+        { body: { access_token: 'ya29.secret' } },
+        { body: { sub: '1', email: 'a@example.com' } },
+      );
+      const identity = await exchangeCodeForIdentity(bothConfig, 'google', 'the-code');
+      expect(JSON.stringify(identity)).not.toContain('ya29.secret');
+    });
   });
 });
