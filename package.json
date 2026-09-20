@@ -18,7 +18,8 @@
     "coolify-mcp-http": "dist/http.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "public"
   ],
   "scripts": {
     "build": "tsc && shx mkdir -p dist/data && shx cp src/data/*.json dist/data/ && shx chmod +x dist/*.js",
@@ -29,6 +30,8 @@
     "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --testPathPatterns=integration --testTimeout=60000 --coverage=false",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "sync:tokens": "node scripts/sync-tokens.mjs",
+    "check:tokens": "node scripts/sync-tokens.mjs --check",
     "check:spec-drift": "node scripts/check-client-spec-drift.mjs",
     "build:chunks": "node scripts/split-openapi-chunks.mjs",
     "check:chunk-drift": "node scripts/split-openapi-chunks.mjs --check",

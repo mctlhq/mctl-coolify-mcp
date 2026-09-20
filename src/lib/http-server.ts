@@ -7,7 +7,13 @@
  * unchanged under any web-standard host; `http.ts` provides the thin Node
  * adapter. No framework, no cookies, no sessions — the authorize form is the
  * only HTML and carries its whole state in the form body.
+ *
+ * Browser requests to `GET /` receive the landing page from `public/`.
  */
+
+import { readFile } from 'node:fs/promises';
+import { join, normalize, dirname, extname, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   createMcpHandler,
@@ -244,6 +250,68 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+// ── landing page and static asset serving ──────────────────────────────────
+
+/**
+ * The landing page and static assets live in `public/` at the package root.
+ * In the container this is `/app/public/`; locally it is wherever the source
+ * checkout is. The path is resolved once at import time.
+ */
+const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.txt': 'text/plain; charset=utf-8',
+  '.json': 'application/json',
+};
+
+/**
+ * Serve a file from `public/`, with path traversal protection. Returns null
+ * if the file does not exist or the path escapes the root.
+ */
+async function servePublicFile(
+  relativePath: string,
+  cacheSeconds = 300,
+  method = 'GET',
+): Promise<Response | null> {
+  // Decode percent-encoded segments to prevent bypasses like %2e%2e
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(relativePath);
+  } catch {
+    return null;
+  }
+
+  // Normalize and guard: the resolved path must still start with publicDir + sep.
+  const safe = normalize(decoded).replace(/^\/+/, '');
+  if (safe.split('/').includes('..') || safe.split('\\').includes('..')) return null;
+  const absolute = join(publicDir, safe);
+  if (!absolute.startsWith(publicDir + sep) && absolute !== publicDir) return null;
+
+  try {
+    const ext = extname(safe).toLowerCase();
+    const headers: Record<string, string> = {
+      'content-type': MIME_TYPES[ext] ?? 'application/octet-stream',
+      'cache-control': `public, max-age=${cacheSeconds}`,
+      'x-content-type-options': 'nosniff',
+    };
+    if (method === 'HEAD') {
+      return new Response(null, { status: 200, headers });
+    }
+    const body = await readFile(absolute);
+    return new Response(body, {
+      status: 200,
+      headers,
+    });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The authorize page. One credential field, the rest of the OAuth request
  * carried as hidden fields. The form posts back to the same origin; there are
@@ -442,6 +510,36 @@ export function createHttpApp(config: HttpServerConfig): {
       return json(
         provider.persistenceDegraded ? { status: 'ok', persistence: 'degraded' } : { status: 'ok' },
       );
+    }
+
+    // ── landing page and static assets ──────────────────────────────────
+    // Browser requests to the root get the landing page. Non-browser
+    // clients (MCP clients, curl without Accept: text/html) fall through
+    // to the existing 401 challenge or 404.
+    if (path === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
+      const accept = request.headers.get('accept') ?? '';
+      if (accept.includes('text/html') || request.method === 'HEAD') {
+        const page = await servePublicFile('index.html', 60, request.method);
+        if (page) return page;
+      }
+    }
+
+    // Static assets: CSS, JS, favicon, robots.txt.
+    if (
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      (path.startsWith('/assets/') || path === '/favicon.svg' || path === '/robots.txt')
+    ) {
+      const file = await servePublicFile(path, 300, request.method);
+      if (file) return file;
+    }
+
+    // Public text pages: /privacy, /terms
+    if (
+      (path === '/privacy' || path === '/terms') &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      const file = await servePublicFile(`${path.slice(1)}.html`, 60, request.method);
+      if (file) return file;
     }
 
     if (

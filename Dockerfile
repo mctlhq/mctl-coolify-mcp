@@ -27,6 +27,9 @@ RUN npm ci --omit=dev --ignore-scripts
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist
 
+# The landing page is served from here at runtime, not bundled into dist.
+COPY public/ ./public/
+
 # OAuth state volume for HTTP mode (holds OAuth artefacts only — registered
 # clients and token hashes — never a Coolify credential).
 RUN mkdir -p /data && chown node:node /data

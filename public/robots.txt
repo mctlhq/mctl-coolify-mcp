@@ -1,0 +1,12 @@
+# The public pages may be indexed. Everything behind a token or a session is
+# not a page and is listed here only so a crawler does not knock on it.
+User-agent: *
+Allow: /
+Allow: /privacy
+Allow: /terms
+Disallow: /enroll
+Disallow: /authorize
+Disallow: /auth/
+Disallow: /register
+Disallow: /token
+Disallow: /mcp

@@ -44,6 +44,10 @@ jobs:
       - name: Check tool-count claims against the roster
         run: npm run check:tool-count
 
+      - name: Design tokens are in sync
+        if: matrix.node-version == '22.x'
+        run: npm run check:tokens
+
       - name: Build
         run: npm run build
 
