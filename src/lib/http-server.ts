@@ -52,6 +52,14 @@ export interface TenancyConfig {
    * server sits behind a CDN, and publishing them hands over the origin.
    */
   egressAddresses?: string[];
+  /**
+   * Overrides the real `probeCoolify` — dependency injection, not mocking, in
+   * the same shape as `resolver` and `now` elsewhere in this codebase. The
+   * real probe needs a live https Coolify to answer; this is what lets the
+   * rest of the enrolment route (ticket verification, form handling, the
+   * store, the redirect back into the OAuth flow) be tested without one.
+   */
+  probe?: typeof probeCoolify;
 }
 
 export interface HttpServerConfig {
@@ -625,7 +633,7 @@ export function createHttpApp(config: HttpServerConfig): {
       }
 
       const token = form.get('token') ?? '';
-      const probe = await probeCoolify(form.get('base_url') ?? '', token);
+      const probe = await (config.tenancy.probe ?? probeCoolify)(form.get('base_url') ?? '', token);
       if (!probe.ok) return page(probe.reason);
 
       // Re-parse rather than trusting the submitted spelling: what gets stored
