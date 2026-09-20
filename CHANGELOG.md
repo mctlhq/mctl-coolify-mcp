@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.1] - 2026-09-20
+
+### Fixed
+
+- **HTTP mode crashed on startup on Node 20** (`TypeError: webidl.util.markAsUncloneable is not a function`, from `undici`'s own `CacheStorage` shim). 3.6.0 added `undici` as a direct dependency for multi-tenant mode's DNS-pinned dispatcher, but the standalone package requires Node ≥22.19 and was imported at module load time in `src/lib/tenant-dispatcher.ts` — so simply starting `dist/http.js` pulled it in and crashed, in single-tenant HTTP mode too, not only multi-tenant, since both share the same entry point. The import is now deferred to inside `pinnedDispatcherFor`, the one function that actually needs it, so single-tenant and stdio users on Node 20 are unaffected; multi-tenant mode still needs Node ≥22.19 wherever it actually runs. Caught deploying `mctl-coolify-mcp`'s own hosted multi-tenant instance, whose image had not been rebuilt past `node:20-alpine` before this release — that Dockerfile is bumped to `node:22-alpine` as part of this fix.
+
 ## [3.6.0] - 2026-09-20
 
 ### Added

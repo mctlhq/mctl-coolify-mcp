@@ -42,7 +42,7 @@
  * Its idle sockets close on undici's own default keep-alive timeout once the
  * request that created it is done; nothing here holds a longer-lived pool.
  */
-import { Agent, type Dispatcher } from 'undici';
+import type { Dispatcher } from 'undici';
 import { assertPublicUrl, pinnedLookup, resolvePublicAddresses, type Resolver } from './ssrf.js';
 
 export { UnsafeUrlError } from './ssrf.js';
@@ -59,5 +59,11 @@ export async function pinnedDispatcherFor(
 ): Promise<Dispatcher> {
   const url = assertPublicUrl(baseUrl);
   const addresses = await resolvePublicAddresses(url.hostname, options.resolver);
+  // Deferred: `undici` requires Node >=22.19 (its CacheStorage shim needs a
+  // webidl helper older runtimes don't have). A static top-level import would
+  // crash single-tenant and stdio users on Node 20 the moment this *module*
+  // loads, even though they never call this function — multi-tenant mode is
+  // the only caller.
+  const { Agent } = await import('undici');
   return new Agent({ connect: { lookup: pinnedLookup(addresses) } });
 }
