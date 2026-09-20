@@ -222,6 +222,15 @@ reports `"persistence": "degraded"` until a write succeeds again, and the
 server keeps serving from memory; what is lost is state across the next
 restart, not the running server.
 
+### Multi-tenant mode
+
+Everything above describes one container serving one Coolify (or one
+owner's fleet). This fork also has a second mode, `MCP_TENANCY=multi`,
+where one deployment serves any number of unrelated tenants, each with
+their own Coolify and their own credential in Vault, entered through a
+sign-in-and-link flow rather than container configuration. See
+[multi-tenant.md](multi-tenant.md).
+
 ### Running a fleet over HTTP
 
 `COOLIFY_INSTANCES` works in HTTP mode exactly as in stdio; the

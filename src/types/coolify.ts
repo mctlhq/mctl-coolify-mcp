@@ -20,6 +20,16 @@
 export type CoolifyConfig = {
   baseUrl: string;
   customHeaders?: Record<string, string>;
+  /**
+   * Pin outbound connections to a resolved address set (#multi-tenant SSRF).
+   *
+   * Unset in single-tenant use: the base URL is operator configuration, and
+   * the upstream SSRF guard deliberately does not touch it. Set by the
+   * multi-tenant registry, which rebuilds it fresh on every request because
+   * the base URL there is tenant-supplied and DNS can be repointed between
+   * one request and the next.
+   */
+  dispatcher?: import('undici').Dispatcher;
 } & (
   | { accessToken: string; accessTokenFile?: string }
   | { accessToken?: string; accessTokenFile: string }

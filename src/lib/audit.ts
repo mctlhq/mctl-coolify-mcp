@@ -106,6 +106,8 @@ export interface AuditEntry {
   duration_ms: number;
   /** HTTP mode only: the OAuth client that made the call. */
   client_id?: string;
+  /** Multi-tenant mode only: which tenant's Coolify credential answered the call. */
+  subject?: string;
 }
 
 /**
@@ -189,6 +191,16 @@ interface AuditedCallInput {
   args: unknown;
   instance?: string;
   clientId?: string;
+  /**
+   * The authenticated tenant, in multi-tenant mode. Deliberately separate
+   * from `clientId`: that names the OAuth *client* (Claude Desktop, Claude
+   * Code, …), which is the same for every tenant using the same app and
+   * answers "what talked to the server." This answers "on whose behalf" —
+   * the question that matters once one server serves more than one tenant's
+   * Coolify. Absent entirely in single-tenant mode, where there is only ever
+   * one tenant and naming them again would be noise.
+   */
+  subject?: string;
   now?: () => number;
   write?: (entry: AuditEntry) => void;
 }
@@ -223,6 +235,7 @@ export async function auditedCall<T>(
     if (input.instance) entry.instance = input.instance;
     if (reason) entry.reason = reason;
     if (input.clientId) entry.client_id = input.clientId;
+    if (input.subject) entry.subject = input.subject;
     write(entry);
   };
 

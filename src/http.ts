@@ -21,6 +21,11 @@ import {
   ensureStateFileWritable,
 } from './lib/startup-check.js';
 import { registryFromEnv, type InstanceRegistry } from './lib/instances.js';
+import { identityFromEnv } from './lib/identity.js';
+import { VaultClient, vaultFromEnv } from './lib/vault.js';
+import { StateFileVaultSync, hydrateStateFile } from './lib/oauth-state-vault.js';
+import { VaultTenantStore } from './lib/tenancy.js';
+import type { TenancyConfig } from './lib/http-server.js';
 import type { CoolifyConfig } from './types/coolify.js';
 
 /**
@@ -30,6 +35,13 @@ import type { CoolifyConfig } from './types/coolify.js';
  * being a free memory exhaustion.
  */
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Multi-tenant mode's default OAuth state path — the container's own
+ * writable layer, not a mounted volume. hydrateStateFile/StateFileVaultSync
+ * (oauth-state-vault.ts) are what make a file here survive a restart.
+ */
+const DEFAULT_MULTI_TENANT_STATE_FILE = '/tmp/coolify-mcp-oauth-state.json';
 
 class BodyTooLarge extends Error {}
 
@@ -73,7 +85,7 @@ async function writeResponse(response: Response, res: ServerResponse): Promise<v
   res.end();
 }
 
-function main(): void {
+async function main(): Promise<void> {
   // Collect every configuration problem before failing, so the person staring
   // at Coolify's deploy log fixes the lot in one pass instead of one per boot.
   const problems: string[] = [];
@@ -81,12 +93,17 @@ function main(): void {
   const accessToken = process.env.COOLIFY_ACCESS_TOKEN || '';
   const rawPublicUrl = process.env.MCP_PUBLIC_URL || '';
 
-  if (!baseUrl) {
+  // Multi-tenant mode (MCP_TENANCY=multi): every caller brings their own
+  // Coolify, so the operator needs none and the container holds no Coolify
+  // credential of its own at all.
+  const multiTenant = (process.env.MCP_TENANCY || 'single').toLowerCase() === 'multi';
+
+  if (!multiTenant && !baseUrl) {
     problems.push(
       'COOLIFY_BASE_URL is not set. Set it to your Coolify URL, e.g. https://coolify.example.com',
     );
   }
-  if (!accessToken) {
+  if (!multiTenant && !accessToken) {
     problems.push(
       'COOLIFY_ACCESS_TOKEN is not set. Create one in Coolify under Keys & Tokens → API tokens',
     );
@@ -122,7 +139,16 @@ function main(): void {
   // The OAuth state file (#417). Its default is right in the image and wrong
   // everywhere else, and the write that finds out runs on a timer after the
   // first registration has already answered 201. Ask now instead.
-  const stateFile = process.env.MCP_OAUTH_STATE_FILE || DEFAULT_OAUTH_STATE_FILE;
+  //
+  // Multi-tenant mode defaults it under /tmp instead: /data is a volume this
+  // mode does not mount (see oauth-state-vault.ts — Vault is the durable
+  // store, and /tmp is scratch space this container already has for free).
+  // An operator who sets MCP_OAUTH_STATE_FILE explicitly is still honored
+  // either way, e.g. a self-hosted operator running multi mode with their
+  // own volume.
+  const stateFile =
+    process.env.MCP_OAUTH_STATE_FILE ||
+    (multiTenant ? DEFAULT_MULTI_TENANT_STATE_FILE : DEFAULT_OAUTH_STATE_FILE);
   const stateProblem = ensureStateFileWritable(
     stateFile,
     Boolean(process.env.MCP_OAUTH_STATE_FILE),
@@ -143,15 +169,66 @@ function main(): void {
   // proof-of-access fetch — never on any other fetch this server makes.
   // Proof of access validates against the default instance ONLY: a fleet is
   // one trust domain, so proving membership of the default proves the fleet.
-  let registry: InstanceRegistry;
-  try {
-    registry = registryFromEnv(process.env);
-  } catch (error) {
-    console.error('coolify-mcp http mode cannot start:');
-    console.error(`  - ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+  let registry: InstanceRegistry | undefined;
+  let coolify: CoolifyConfig | undefined;
+  if (!multiTenant) {
+    try {
+      registry = registryFromEnv(process.env);
+    } catch (error) {
+      console.error('coolify-mcp http mode cannot start:');
+      console.error(`  - ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+    coolify = registry.default;
   }
-  const coolify: CoolifyConfig = registry.default;
+
+  // Multi-tenant needs an identity provider and somewhere to keep each
+  // tenant's credential. Both are checked here rather than on first use: a
+  // server that boots without them would 500 the first person to try to
+  // connect, long after the deploy log has scrolled past.
+  let tenancy: TenancyConfig | undefined;
+  let stateVault: VaultClient | undefined;
+  if (multiTenant) {
+    const identity = identityFromEnv(process.env, publicUrl);
+    const vaultConfig = vaultFromEnv(process.env);
+    if (!identity) {
+      problems.push(
+        'MCP_TENANCY=multi needs GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET. Create an OAuth app ' +
+          `with the callback ${publicUrl || 'https://your-domain'}/auth/github/callback`,
+      );
+    }
+    if (!vaultConfig) {
+      problems.push(
+        'MCP_TENANCY=multi needs VAULT_ADDR and VAULT_KV_MOUNT (a KV v2 mount with max_versions=1)',
+      );
+    }
+    if (identity && vaultConfig) {
+      // One client, shared between the tenant store and the OAuth state
+      // mirror: both are the same Vault mount, and sharing means one
+      // Kubernetes-auth login and one lease renewal, not two.
+      const vault = new VaultClient(vaultConfig);
+      tenancy = {
+        store: new VaultTenantStore(vault),
+        identity,
+        egressAddresses: (process.env.MCP_EGRESS_ADDRESSES || '')
+          .split(',')
+          .map((address) => address.trim())
+          .filter(Boolean),
+      };
+      stateVault = vault;
+    }
+    if (problems.length > 0) {
+      console.error('coolify-mcp http mode cannot start:');
+      for (const problem of problems) console.error(`  - ${problem}`);
+      process.exit(1);
+    }
+  }
+  // Restore whatever OAuth state survived the last restart before
+  // OAuthProvider's constructor reads the (otherwise empty, freshly-created)
+  // file — hydrateStateFile is a no-op on first boot, when Vault has nothing
+  // yet, exactly like the file-based load() it stands in front of.
+  if (stateVault) await hydrateStateFile(stateVault, stateFile);
+
   const listen = listenOptionsFromEnv(process.env);
   const readonly = process.env.MCP_READONLY === 'true';
 
@@ -165,6 +242,7 @@ function main(): void {
     refreshTokenTtl: Number(process.env.MCP_REFRESH_TOKEN_TTL || 28_800),
     stateFile,
     readonly,
+    tenancy,
   });
 
   const server = createServer((req, res) => {
@@ -191,6 +269,9 @@ function main(): void {
   server.headersTimeout = 15_000;
   server.requestTimeout = 30_000;
 
+  const stateSync = stateVault ? new StateFileVaultSync(stateVault, stateFile) : undefined;
+  stateSync?.start();
+
   server.listen(listen, () => {
     console.error(
       `coolify-mcp http mode on ${describeListen(listen)} (public: ${publicUrl}${readonly ? ', read-only' : ''})`,
@@ -199,6 +280,10 @@ function main(): void {
 
   const shutdown = (): void => {
     app.provider.flush();
+    // Best-effort: the 3s force-exit below already bounds how long this can
+    // delay a shutdown, and a sync that loses this race loses only the very
+    // last write, the same trade writeState() itself already makes.
+    void stateSync?.flush().finally(() => stateSync.stop());
     server.close(() => process.exit(0));
     // Belt and braces: if a live SSE stream keeps close() waiting, leave anyway.
     setTimeout(() => process.exit(0), 3000).unref();
@@ -207,4 +292,7 @@ function main(): void {
   process.on('SIGINT', shutdown);
 }
 
-main();
+main().catch((error: unknown) => {
+  console.error('coolify-mcp http mode: fatal error during startup:', error);
+  process.exit(1);
+});
