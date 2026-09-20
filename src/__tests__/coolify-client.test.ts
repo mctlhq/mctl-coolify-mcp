@@ -7259,3 +7259,48 @@ describe('volume backups on a pre-4.2 instance (#305)', () => {
     );
   });
 });
+
+describe('CoolifyClient dispatcher routing (multi-tenant DNS pinning)', () => {
+  // Regression for the bug this fix addresses: `tenant-dispatcher.ts` builds
+  // its `Dispatcher` from the standalone `undici` npm package, a separate
+  // build from whatever `undici` Node bundles internally for the global
+  // `fetch()`. Handing one package's Dispatcher to the other's fetch throws
+  // `UND_ERR_INVALID_ARG` on every call — 100% reproducible in production,
+  // invisible to every other test in this file because none of them pass a
+  // real dispatcher through a real fetch. This asserts the client routes a
+  // dispatcher-bearing request through `undici`'s own `fetch`, never the
+  // global one, so the two can never be mixed again by accident.
+  const mockFetch = jest.fn<typeof fetch>();
+
+  beforeEach(() => {
+    mockFetch.mockClear();
+    global.fetch = mockFetch;
+  });
+
+  it('does not call the global fetch when a dispatcher is configured', async () => {
+    const client = new CoolifyClient({
+      baseUrl: 'https://coolify.example.com',
+      accessToken: 'test-token',
+      // A real Dispatcher instance is not required to prove the routing
+      // decision: undici's own fetch will reject this bare object before
+      // opening a socket, which is enough to show the call reached it
+      // instead of the mocked global fetch.
+      dispatcher: {} as unknown as import('undici').Dispatcher,
+    });
+
+    await expect(client.getVersion()).rejects.toBeDefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('still uses the global fetch when no dispatcher is configured', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse('4.3.12', true, 200, 'text/plain'));
+    const client = new CoolifyClient({
+      baseUrl: 'https://coolify.example.com',
+      accessToken: 'test-token',
+    });
+
+    const version = await client.getVersion();
+    expect(version).toEqual({ version: '4.3.12' });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});

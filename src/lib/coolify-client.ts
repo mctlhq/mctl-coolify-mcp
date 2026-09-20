@@ -777,6 +777,31 @@ export class CoolifyClient {
     }
   }
 
+  /**
+   * `dispatcher` (tenant-dispatcher.ts's DNS-pinned `Agent`) is built from the
+   * standalone `undici` npm package, which this repo pins independently of
+   * whatever `undici` Node itself bundles for the global `fetch()`. The two
+   * are separate builds of the same library with an internal handler ABI
+   * that has broken across major versions before — passing one package's
+   * `Dispatcher` into the other's `fetch()` throws `UND_ERR_INVALID_ARG`
+   * ("invalid onRequestStart method") on every single call, not a fraction of
+   * them, which is what made this reproduce 100% of the time in production
+   * while every unit test (mocked `fetch`, no real dispatcher) stayed green.
+   * Using the package's own `fetch` whenever its own `Dispatcher` is in play
+   * keeps both ends on the same ABI; the global `fetch()` remains untouched
+   * for single-tenant mode, which never sets a dispatcher and must stay
+   * import-free here for Node 20 (see tenant-dispatcher.ts's own deferred
+   * import of `Agent` for the same reason).
+   */
+  private async doFetch(url: string, options: RequestInit): Promise<Response> {
+    if (!this.dispatcher) return fetch(url, options);
+    const { fetch: undiciFetch } = await import('undici');
+    return undiciFetch(url, {
+      ...options,
+      dispatcher: this.dispatcher,
+    } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
+  }
+
   private async attempt<T>(
     path: string,
     options: RequestInit = {},
@@ -785,7 +810,7 @@ export class CoolifyClient {
     const url = `${this.baseUrl}/api/v1${path}`;
 
     try {
-      const response = await fetch(url, {
+      const response = await this.doFetch(url, {
         ...options,
         headers: {
           'Content-Type': 'application/json',
@@ -793,10 +818,6 @@ export class CoolifyClient {
           ...this.customHeaders,
           ...options.headers,
         },
-        // Not in fetch()'s standard RequestInit; undici's global
-        // implementation honors it, and TokenSource's re-read-on-401 logic
-        // above is unaffected either way.
-        ...(this.dispatcher ? ({ dispatcher: this.dispatcher } as Record<string, unknown>) : {}),
       });
 
       // Handle empty responses (204 No Content, etc.)
@@ -955,7 +976,7 @@ export class CoolifyClient {
     }
     // The /version endpoint returns plain text, not JSON
     const url = `${this.baseUrl}/api/v1/version`;
-    const response = await fetch(url, {
+    const response = await this.doFetch(url, {
       headers: {
         // Current token, but no 401 retry: this path calls fetch() directly
         // rather than through request(), because /version answers in plain
@@ -963,7 +984,6 @@ export class CoolifyClient {
         Authorization: `Bearer ${this.tokens.current()}`,
         ...this.customHeaders,
       },
-      ...(this.dispatcher ? ({ dispatcher: this.dispatcher } as Record<string, unknown>) : {}),
     });
 
     if (!response.ok) {
