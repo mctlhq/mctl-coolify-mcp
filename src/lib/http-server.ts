@@ -18,10 +18,51 @@ import { CoolifyMcpServer } from './mcp-server.js';
 import { OAuthProvider, OAuthErrorResponse, isClientIdUrl } from './oauth.js';
 import type { CoolifyConfig } from '../types/coolify.js';
 import type { InstanceRegistry } from './instances.js';
+import {
+  exchangeCodeForIdentity,
+  loginRedirectUrl,
+  openEnrolmentTicket,
+  openLoginState,
+  sealEnrolmentTicket,
+  sealLoginState,
+  IdentityError,
+  type IdentityConfig,
+  type VerifiedIdentity,
+} from './identity.js';
+import {
+  NotEnrolledError,
+  registryForCaller,
+  subjectFromAuthInfo,
+  type TenantRecord,
+  type TenantStore,
+} from './tenancy.js';
+import { enrollPage, isValidInstanceName, normalizeBaseUrl, probeCoolify } from './enroll.js';
+
+/**
+ * Multi-tenant mode. Absent means the upstream single-tenant server: the
+ * container's own credential serves every caller, and the authorize form asks
+ * for proof of access to that one instance.
+ */
+export interface TenancyConfig {
+  store: TenantStore;
+  identity: IdentityConfig;
+  /**
+   * Outbound addresses, shown only to a logged-in tenant who needs them for
+   * Coolify's "Allowed API IPs". Never put these in public documentation: this
+   * server sits behind a CDN, and publishing them hands over the origin.
+   */
+  egressAddresses?: string[];
+}
 
 export interface HttpServerConfig {
-  /** The default instance: what tier-2 proof of access validates against. */
-  coolify: CoolifyConfig;
+  /**
+   * The default instance: what tier-2 proof of access validates against.
+   *
+   * Optional, because multi-tenant mode has no such instance — the operator of
+   * a hosted server need not own a Coolify at all, and every caller brings
+   * their own. Required in single-tenant mode, where it is the whole server.
+   */
+  coolify?: CoolifyConfig;
   /** The full fleet (#367); omitted means `coolify` alone. */
   instances?: InstanceRegistry;
   /** Public base URL of this container, e.g. https://mcp.example.com */
@@ -30,6 +71,8 @@ export interface HttpServerConfig {
   refreshTokenTtl: number;
   stateFile: string;
   readonly: boolean;
+  /** Present in multi-tenant mode only. */
+  tenancy?: TenancyConfig;
 }
 
 /**
@@ -171,6 +214,11 @@ function oauthError(error: OAuthErrorResponse): Response {
   return json({ error: error.code, error_description: error.description }, error.status);
 }
 
+/** A 302 that is never cached: every one of these carries one-time state. */
+function redirect(location: string): Response {
+  return new Response(null, { status: 302, headers: { location, 'cache-control': 'no-store' } });
+}
+
 function html(body: string, status = 200): Response {
   return new Response(body, {
     status,
@@ -255,9 +303,47 @@ export function createHttpApp(config: HttpServerConfig): {
     resourceMetadataUrl: `${publicUrl}/.well-known/oauth-protected-resource`,
   });
 
+  /**
+   * The registry this caller gets.
+   *
+   * Single-tenant: the container's own, as upstream does it. Multi-tenant: one
+   * built from the caller's own enrolment record, so two callers are never in
+   * one registry and `instance: "all"` can never fan out across tenants.
+   *
+   * The SDK calls this factory once per HTTP request and names this exact use
+   * — "multi-tenant servers keyed off authInfo". A single shared instance
+   * would answer the second caller with the first caller's access.
+   */
+  async function registryFor(
+    authInfo: { extra?: unknown } | undefined,
+  ): Promise<InstanceRegistry | CoolifyConfig> {
+    if (!config.tenancy) {
+      const single = config.instances ?? config.coolify;
+      if (!single) throw new Error('This server is not configured with a Coolify instance.');
+      return single;
+    }
+    const subject = subjectFromAuthInfo(authInfo?.extra);
+    if (!subject) {
+      // A token with no subject cannot be resolved to a tenant, and guessing
+      // which one it meant is exactly how two tenants cross. Refuse instead.
+      throw new Error('This token is not bound to an account. Reconnect to sign in again.');
+    }
+    try {
+      return await registryForCaller(config.tenancy.store, subject);
+    } catch (error) {
+      if (error instanceof NotEnrolledError) {
+        throw new Error(
+          `No Coolify instance is linked to this account yet. Link one at ${publicUrl}/enroll and then try again.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+
   const mcpHandler: McpHttpHandler = createMcpHandler(
-    () =>
-      new CoolifyMcpServer(config.instances ?? config.coolify, {
+    async (ctx) =>
+      new CoolifyMcpServer(await registryFor(ctx.authInfo), {
         readonly: config.readonly,
         requireElicitation: true,
         // On by default here: a multi-client, internet-facing server is exactly
@@ -271,6 +357,33 @@ export function createHttpApp(config: HttpServerConfig): {
 
   // 20 guesses a minute per IP on the credential-bearing endpoints.
   const authLimiter = new RateLimiter(20, 60_000);
+
+  /**
+   * Finish the OAuth request that was parked while the tenant logged in and,
+   * if needed, enrolled.
+   *
+   * The request is re-validated rather than trusted: it has been through the
+   * browser twice. The signature proves it came back unmodified, and this
+   * proves it is still a request this server would have accepted — a client
+   * may have been forgotten, or its metadata document re-fetched, in between.
+   */
+  async function completeFlow(query: string, identity: VerifiedIdentity): Promise<Response> {
+    const params = new URLSearchParams(query);
+    try {
+      await provider.resolveClient(params.get('client_id') ?? '');
+      const validated = provider.validateAuthorizationRequest(params);
+      const { redirectTo } = provider.completeAuthorization(validated, {
+        provider: identity.provider,
+        sub: identity.sub,
+      });
+      return redirect(redirectTo);
+    } catch (error) {
+      if (error instanceof OAuthErrorResponse) {
+        return html(`<p>Authorization request rejected: ${escapeHtml(error.description)}</p>`, 400);
+      }
+      throw error;
+    }
+  }
 
   async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -325,6 +438,13 @@ export function createHttpApp(config: HttpServerConfig): {
       try {
         await provider.resolveClient(clientId);
         const validated = provider.validateAuthorizationRequest(url.searchParams);
+        if (config.tenancy) {
+          // Validated before we leave: a malformed redirect_uri must be
+          // rejected here, not after a round trip through the provider.
+          return redirect(
+            loginRedirectUrl(config.tenancy.identity, sealLoginState(url.searchParams.toString())),
+          );
+        }
         return html(
           authorizePage(url.searchParams, validated.client.client_name ?? 'An MCP client'),
         );
@@ -360,6 +480,12 @@ export function createHttpApp(config: HttpServerConfig): {
         throw error;
       }
 
+      if (!config.coolify) {
+        // Unreachable in multi mode — the GET leg redirects to the identity
+        // provider — but a POST straight to this path must not fall through to
+        // a proof check with nothing to prove against.
+        return html('<p>This server does not use token proof of access.</p>', 404);
+      }
       const presented = form.get('coolify_token') ?? '';
       const proof = presented
         ? await validateCoolifyToken(
@@ -387,6 +513,165 @@ export function createHttpApp(config: HttpServerConfig): {
         status: 302,
         headers: { location: redirectTo, 'cache-control': 'no-store' },
       });
+    }
+
+    // =========================================================================
+    // Multi-tenant: identity callback and enrolment
+    //
+    // No cookies and no sessions, matching the upstream authorize form: every
+    // page carries its whole state in a signed ticket. Nothing here is served
+    // at all in single-tenant mode.
+    // =========================================================================
+
+    if (config.tenancy && path === '/auth/github/callback' && request.method === 'GET') {
+      if (!authLimiter.allow(`cb:${clientIp}`)) {
+        return html('<p>Too many attempts. Try again in a minute.</p>', 429);
+      }
+      let query: string;
+      try {
+        query = openLoginState(url.searchParams.get('state') ?? '').query;
+      } catch (error) {
+        return html(
+          `<p>${escapeHtml(error instanceof IdentityError ? error.message : 'The login could not be verified.')}</p>`,
+          400,
+        );
+      }
+
+      let identity;
+      try {
+        identity = await exchangeCodeForIdentity(
+          config.tenancy.identity,
+          url.searchParams.get('code') ?? '',
+        );
+      } catch (error) {
+        return html(
+          `<p>${escapeHtml(error instanceof IdentityError ? error.message : 'The login failed.')}</p>`,
+          400,
+        );
+      }
+
+      const record = await config.tenancy.store.read(identity);
+      const enrolled = (record?.instances.length ?? 0) > 0;
+
+      // Arriving without an OAuth request in hand — someone opened /enroll
+      // directly to manage or revoke what they linked. There is nothing to
+      // complete, so show the page.
+      if (query === '') {
+        return html(
+          enrollPage({
+            login: identity.login,
+            record,
+            egressAddresses: config.tenancy.egressAddresses,
+            continueState: sealEnrolmentTicket(identity, ''),
+          }),
+        );
+      }
+
+      if (!enrolled) {
+        return html(
+          enrollPage({
+            login: identity.login,
+            record,
+            egressAddresses: config.tenancy.egressAddresses,
+            continueState: sealEnrolmentTicket(identity, query),
+            notice: 'Signed in. Link a Coolify instance to finish connecting.',
+          }),
+        );
+      }
+
+      return completeFlow(query, identity);
+    }
+
+    if (config.tenancy && path === '/enroll' && request.method === 'GET') {
+      // No identity yet, so this is a login with nothing to complete
+      // afterwards; the callback recognises the empty request and shows the
+      // management page.
+      return redirect(loginRedirectUrl(config.tenancy.identity, sealLoginState('')));
+    }
+
+    if (config.tenancy && path === '/enroll' && request.method === 'POST') {
+      if (!authLimiter.allow(`enroll:${clientIp}`)) {
+        return html('<p>Too many attempts. Try again in a minute.</p>', 429);
+      }
+      const form = new URLSearchParams(await request.text());
+      let ticket;
+      try {
+        ticket = openEnrolmentTicket(form.get('continue') ?? '');
+      } catch (error) {
+        return html(
+          `<p>${escapeHtml(error instanceof IdentityError ? error.message : 'The enrolment session expired.')}</p>`,
+          400,
+        );
+      }
+      const { identity, query } = ticket;
+      const existing = await config.tenancy.store.read(identity);
+
+      const page = (error?: string, notice?: string, record?: TenantRecord): Response =>
+        html(
+          enrollPage({
+            login: identity.login,
+            record: record ?? existing,
+            error,
+            notice,
+            egressAddresses: config.tenancy?.egressAddresses,
+            continueState: sealEnrolmentTicket(identity, query),
+          }),
+          error ? 400 : 200,
+        );
+
+      const name = (form.get('name') ?? '').trim().toLowerCase();
+      if (!isValidInstanceName(name)) {
+        return page('Use lowercase letters, digits and hyphens for the name.');
+      }
+
+      const token = form.get('token') ?? '';
+      const probe = await probeCoolify(form.get('base_url') ?? '', token);
+      if (!probe.ok) return page(probe.reason);
+
+      // Re-parse rather than trusting the submitted spelling: what gets stored
+      // is the canonical origin the probe actually reached.
+      const baseUrl = normalizeBaseUrl(new URL(form.get('base_url') ?? ''));
+      const instances = (existing?.instances ?? []).filter((entry) => entry.name !== name);
+      instances.push({ name, baseUrl, accessToken: token });
+      const record: TenantRecord = {
+        instances,
+        updatedAt: Date.now(),
+        login: identity.login,
+      };
+      await config.tenancy.store.write(identity, record);
+
+      if (query === '') {
+        return page(undefined, `Linked ${name} (${probe.teamName}).`, record);
+      }
+      return completeFlow(query, identity);
+    }
+
+    if (config.tenancy && path === '/enroll/revoke' && request.method === 'POST') {
+      if (!authLimiter.allow(`enroll:${clientIp}`)) {
+        return html('<p>Too many attempts. Try again in a minute.</p>', 429);
+      }
+      let ticket;
+      try {
+        ticket = openEnrolmentTicket(
+          new URLSearchParams(await request.text()).get('continue') ?? '',
+        );
+      } catch (error) {
+        return html(
+          `<p>${escapeHtml(error instanceof IdentityError ? error.message : 'The enrolment session expired.')}</p>`,
+          400,
+        );
+      }
+      await config.tenancy.store.revoke(ticket.identity);
+      return html(
+        enrollPage({
+          login: ticket.identity.login,
+          egressAddresses: config.tenancy.egressAddresses,
+          continueState: sealEnrolmentTicket(ticket.identity, ticket.query),
+          notice:
+            'Unlinked. The stored tokens were destroyed, not merely marked deleted. Any MCP ' +
+            'client connected to this account will stop working immediately.',
+        }),
+      );
     }
 
     if (path === '/token' && request.method === 'POST') {

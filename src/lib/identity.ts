@@ -136,24 +136,29 @@ function sign(payload: string): string {
 }
 
 /**
- * Seal the original authorization request so it survives the trip through
- * GitHub and comes back unmodified.
+ * Seal a short-lived value that travels through the user's browser.
  *
- * Signed, not encrypted: the payload is the client's own OAuth request, which
- * the client already knows. Nothing secret goes in it — in particular no
- * credential, and no Coolify URL. What the signature buys is that the request
- * which returns is the request that left, so a redirect cannot be re-pointed
- * and a `code_challenge` cannot be swapped for the attacker's own.
+ * Signed, not encrypted. Two things ride on this: the client's own OAuth
+ * request across the trip to GitHub, and — after the login — the identity we
+ * just established, carried into the enrolment form. Neither is secret to the
+ * person holding it: the first is the client's own request, the second is who
+ * they just proved they are. No credential ever goes in here.
  *
- * The nonce makes two otherwise identical logins distinguishable in logs; the
- * expiry bounds how long a leaked value stays usable.
+ * What the signature buys is integrity. Without it a redirect could be
+ * re-pointed, a `code_challenge` swapped for the attacker's own, or — worse —
+ * a subject edited, which would file one tenant's Coolify token under another
+ * tenant's name. The nonce distinguishes otherwise identical flows in logs;
+ * the expiry bounds how long a value left in browser history stays usable.
  */
-export function sealLoginState(originalQuery: string): string {
+export function sealTicket(
+  claims: Record<string, unknown>,
+  ttlSeconds = STATE_TTL_SECONDS,
+): string {
   const payload = b64url(
     Buffer.from(
       JSON.stringify({
-        q: originalQuery,
-        exp: Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
+        ...claims,
+        exp: Math.floor(Date.now() / 1000) + ttlSeconds,
         n: b64url(randomBytes(9)),
       }),
       'utf8',
@@ -163,10 +168,10 @@ export function sealLoginState(originalQuery: string): string {
 }
 
 /**
- * Open a state value that came back from GitHub, i.e. attacker-controlled
- * input. Throws on anything that is not a currently-valid state we minted.
+ * Open a ticket that came back through the browser, i.e. attacker-controlled
+ * input. Throws on anything that is not a currently-valid ticket we minted.
  */
-export function openLoginState(value: string): { query: string } {
+export function openTicket(value: string): Record<string, unknown> {
   if (!value || Buffer.byteLength(value, 'utf8') > MAX_STATE_BYTES) {
     throw new IdentityError('The login state is missing or malformed.');
   }
@@ -188,14 +193,56 @@ export function openLoginState(value: string): { query: string } {
   } catch {
     throw new IdentityError('The login state is malformed.');
   }
-  const claims = decoded as { q?: unknown; exp?: unknown };
-  if (typeof claims.q !== 'string' || typeof claims.exp !== 'number') {
-    throw new IdentityError('The login state is malformed.');
-  }
+  const claims = decoded as Record<string, unknown>;
+  if (typeof claims?.exp !== 'number') throw new IdentityError('The login state is malformed.');
   if (claims.exp < Math.floor(Date.now() / 1000)) {
     throw new IdentityError('The login took too long. Start again.');
   }
+  return claims;
+}
+
+/** The login leg: carries the client's original authorization request. */
+export function sealLoginState(originalQuery: string): string {
+  return sealTicket({ q: originalQuery });
+}
+
+export function openLoginState(value: string): { query: string } {
+  const claims = openTicket(value);
+  if (typeof claims.q !== 'string') throw new IdentityError('The login state is malformed.');
   return { query: claims.q };
+}
+
+/**
+ * The enrolment leg: carries the identity just established, so the enrolment
+ * form works without a cookie or a session — the same stateless shape as the
+ * upstream authorize form, which carries its whole state in the form body.
+ */
+export function sealEnrolmentTicket(identity: VerifiedIdentity, originalQuery: string): string {
+  return sealTicket({
+    provider: identity.provider,
+    sub: identity.sub,
+    login: identity.login,
+    q: originalQuery,
+  });
+}
+
+export function openEnrolmentTicket(value: string): {
+  identity: VerifiedIdentity;
+  query: string;
+} {
+  const claims = openTicket(value);
+  if (
+    claims.provider !== 'github' ||
+    typeof claims.sub !== 'string' ||
+    typeof claims.login !== 'string' ||
+    typeof claims.q !== 'string'
+  ) {
+    throw new IdentityError('The enrolment session is malformed. Start again.');
+  }
+  return {
+    identity: { provider: 'github', sub: claims.sub, login: claims.login },
+    query: claims.q,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,10 @@ import {
   ensureStateFileWritable,
 } from './lib/startup-check.js';
 import { registryFromEnv, type InstanceRegistry } from './lib/instances.js';
+import { identityFromEnv } from './lib/identity.js';
+import { VaultClient, vaultFromEnv } from './lib/vault.js';
+import { VaultTenantStore } from './lib/tenancy.js';
+import type { TenancyConfig } from './lib/http-server.js';
 import type { CoolifyConfig } from './types/coolify.js';
 
 /**
@@ -81,12 +85,17 @@ function main(): void {
   const accessToken = process.env.COOLIFY_ACCESS_TOKEN || '';
   const rawPublicUrl = process.env.MCP_PUBLIC_URL || '';
 
-  if (!baseUrl) {
+  // Multi-tenant mode (MCP_TENANCY=multi): every caller brings their own
+  // Coolify, so the operator needs none and the container holds no Coolify
+  // credential of its own at all.
+  const multiTenant = (process.env.MCP_TENANCY || 'single').toLowerCase() === 'multi';
+
+  if (!multiTenant && !baseUrl) {
     problems.push(
       'COOLIFY_BASE_URL is not set. Set it to your Coolify URL, e.g. https://coolify.example.com',
     );
   }
-  if (!accessToken) {
+  if (!multiTenant && !accessToken) {
     problems.push(
       'COOLIFY_ACCESS_TOKEN is not set. Create one in Coolify under Keys & Tokens → API tokens',
     );
@@ -143,15 +152,54 @@ function main(): void {
   // proof-of-access fetch — never on any other fetch this server makes.
   // Proof of access validates against the default instance ONLY: a fleet is
   // one trust domain, so proving membership of the default proves the fleet.
-  let registry: InstanceRegistry;
-  try {
-    registry = registryFromEnv(process.env);
-  } catch (error) {
-    console.error('coolify-mcp http mode cannot start:');
-    console.error(`  - ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+  let registry: InstanceRegistry | undefined;
+  let coolify: CoolifyConfig | undefined;
+  if (!multiTenant) {
+    try {
+      registry = registryFromEnv(process.env);
+    } catch (error) {
+      console.error('coolify-mcp http mode cannot start:');
+      console.error(`  - ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+    coolify = registry.default;
   }
-  const coolify: CoolifyConfig = registry.default;
+
+  // Multi-tenant needs an identity provider and somewhere to keep each
+  // tenant's credential. Both are checked here rather than on first use: a
+  // server that boots without them would 500 the first person to try to
+  // connect, long after the deploy log has scrolled past.
+  let tenancy: TenancyConfig | undefined;
+  if (multiTenant) {
+    const identity = identityFromEnv(process.env, publicUrl);
+    const vaultConfig = vaultFromEnv(process.env);
+    if (!identity) {
+      problems.push(
+        'MCP_TENANCY=multi needs GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET. Create an OAuth app ' +
+          `with the callback ${publicUrl || 'https://your-domain'}/auth/github/callback`,
+      );
+    }
+    if (!vaultConfig) {
+      problems.push(
+        'MCP_TENANCY=multi needs VAULT_ADDR and VAULT_KV_MOUNT (a KV v2 mount with max_versions=1)',
+      );
+    }
+    if (identity && vaultConfig) {
+      tenancy = {
+        store: new VaultTenantStore(new VaultClient(vaultConfig)),
+        identity,
+        egressAddresses: (process.env.MCP_EGRESS_ADDRESSES || '')
+          .split(',')
+          .map((address) => address.trim())
+          .filter(Boolean),
+      };
+    }
+    if (problems.length > 0) {
+      console.error('coolify-mcp http mode cannot start:');
+      for (const problem of problems) console.error(`  - ${problem}`);
+      process.exit(1);
+    }
+  }
   const listen = listenOptionsFromEnv(process.env);
   const readonly = process.env.MCP_READONLY === 'true';
 
@@ -165,6 +213,7 @@ function main(): void {
     refreshTokenTtl: Number(process.env.MCP_REFRESH_TOKEN_TTL || 28_800),
     stateFile,
     readonly,
+    tenancy,
   });
 
   const server = createServer((req, res) => {
