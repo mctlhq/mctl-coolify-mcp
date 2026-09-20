@@ -34,13 +34,19 @@
  *
  * Node's global `fetch()` has no `lookup` option of its own — that belongs to
  * `http.request`/`https.request`, which is what upstream's own SSRF-guarded
- * fetch (`ssrf.ts`) uses instead of `fetch()`. Threading a `dispatcher`
- * through `CoolifyClient`'s existing `fetch()` calls needed less upstream
- * surface changed than replacing its transport, so a per-request `undici`
- * `Agent` with a pinned `connect.lookup` is what carries the same
- * `pinnedLookup` this codebase already trusts into a `fetch()`-shaped call.
- * Its idle sockets close on undici's own default keep-alive timeout once the
- * request that created it is done; nothing here holds a longer-lived pool.
+ * fetch (`ssrf.ts`) uses instead of `fetch()`. A per-request `undici` `Agent`
+ * with a pinned `connect.lookup` carries the same `pinnedLookup` this
+ * codebase already trusts into a `fetch()`-shaped call. Its idle sockets
+ * close on undici's own default keep-alive timeout once the request that
+ * created it is done; nothing here holds a longer-lived pool.
+ *
+ * This `Agent` is a standalone-`undici`-package object, a different build
+ * from whatever `undici` Node bundles internally for the global `fetch()` —
+ * the two have an internal request-handler ABI that has broken across major
+ * versions before. `CoolifyClient` must consume this dispatcher through
+ * `undici`'s own `fetch` export, never the global one, or every call throws
+ * `UND_ERR_INVALID_ARG` before opening a socket. See `coolify-client.ts`'s
+ * `doFetch`.
  */
 import type { Dispatcher } from 'undici';
 import { assertPublicUrl, pinnedLookup, resolvePublicAddresses, type Resolver } from './ssrf.js';

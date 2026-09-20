@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.2] - 2026-09-20
+
+### Fixed
+
+- **Every tenant Coolify API call in multi-tenant mode failed with `UND_ERR_INVALID_ARG` ("invalid onRequestStart method"), 100% of the time.** `tenant-dispatcher.ts` builds its DNS-pinned `Dispatcher` from the standalone `undici` npm package (pinned to 8.x), but `coolify-client.ts` passed that dispatcher into the Node-global `fetch()`, which uses whatever `undici` build Node itself bundles internally (6.x on the Node 22 image this server runs on). The two are separate builds of the same library with an internal request-handler ABI that has broken across major versions, so mixing a package-built `Dispatcher` into the global `fetch()` throws immediately, before any socket opens. Caught live testing multi-tenant enrolment end-to-end: enrolment itself passed (it does not go through the dispatcher), and the very first real tool call against the enrolled instance failed instantly on every call, regardless of instance or endpoint. Fixed by routing dispatcher-bearing requests through `undici`'s own `fetch` export instead of the global one, so the dispatcher and the fetch implementation are always the same build; single-tenant mode is unaffected and keeps using the global `fetch()`, with no new import at module load time.
+
 ## [3.7.1] - 2026-09-20
 
 ### Fixed
