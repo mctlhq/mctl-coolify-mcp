@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-09-20
+
+### Added
+
+- **Multi-tenant mode** (`MCP_TENANCY=multi`). A single hosted deployment can now serve any number of tenants, each managing their own Coolify instance, instead of one container per Coolify. `/authorize` redirects to a GitHub login instead of asking for a Coolify token directly; a tenant with no linked instance is sent to a self-service `/enroll` page that validates the base URL and token with a live, SSRF-guarded probe before storing anything. Credentials are stored per-tenant in Vault (KV v2), keyed by the hashed GitHub identity, with `destroy`-only revocation (never `delete`, which only tombstones the current version and leaves earlier ones readable) and a per-path `max_versions` set on every write rather than assumed from the mount, since the real deployment target is a shared mount with unlimited retention. Every outbound Coolify call in multi-tenant mode re-resolves and pins DNS at request time, closing a rebinding SSRF window that a resolve-once-at-enroll design would have left open. The audit log now records the grant subject alongside the calling client. OAuth authorization state survives a container restart without a persistent volume, by mirroring the existing state file to and from Vault. Single-tenant mode (`MCP_TENANCY=single`, the default) is unchanged. See `docs/multi-tenant.md`.
+
 ## [3.5.1] - 2026-09-16
 
 ### Added
