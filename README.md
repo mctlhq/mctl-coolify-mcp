@@ -10,7 +10,7 @@
 
 Manage [Coolify](https://coolify.io/) from Claude, Cursor, or any MCP client: 45 tools for deploying, debugging, and operating your self-hosted PaaS in plain English. Destructive operations ask a human first; secrets stay masked.
 
-📖 **[coolify-mcp.stumason.dev](https://coolify-mcp.stumason.dev)** · [Tool reference](docs/tools.md) · [Prompts and resources](docs/prompts-and-resources.md) · [Remote / HTTP mode](docs/http-mode.md) · [Fleet](docs/fleet.md) · [Doctor](docs/doctor.md) · [Safety and security](docs/security.md) · [Changelog](CHANGELOG.md)
+📖 **[coolify-mcp.stumason.dev](https://coolify-mcp.stumason.dev)** · [Tool reference](docs/tools.md) · [Prompts and resources](docs/prompts-and-resources.md) · [Remote / HTTP mode](docs/http-mode.md) · [Multi-tenant mode](docs/multi-tenant.md) · [Fleet](docs/fleet.md) · [Doctor](docs/doctor.md) · [Safety and security](docs/security.md) · [Changelog](CHANGELOG.md)
 
 ## Install
 
