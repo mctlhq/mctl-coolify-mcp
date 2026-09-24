@@ -1,5 +1,5 @@
 {
-  "$comment": "Source of truth for the Cloudflare MCP portal mapping of server `coolify` (mctlhq/mctl-gitops#1363). Every tool this server registers on the portal must appear here with an explicit decision: the tools annotated readOnlyHint in src/lib/mcp-server.ts TOOL_ANNOTATIONS are enabled, everything that writes is disabled. `list_instances` is omitted because it is registered only in fleet mode, which the portal upstream does not run. Apply with the operator-run flow shared by the other upstreams (mctl-telegram scripts/portal-allowlist-apply.sh, one file per server).",
+  "$comment": "Source of truth for the Cloudflare MCP portal mapping of server `coolify` (mctlhq/mctl-gitops#1363). Every tool this server registers on the portal must appear here with an explicit decision: the tools annotated readOnlyHint in src/lib/mcp-server.ts TOOL_ANNOTATIONS are enabled, everything that writes is disabled. `list_instances` is omitted because it is registered only in fleet mode, which the portal upstream does not run. Apply with the operator-run flow shared by the other upstreams (mctl-telegram scripts/portal-allowlist-apply.sh, one file per server). CI-gated: scripts/check-portal-allowlist.mjs (npm run check:portal-allowlist) fails the build unless the listed names equal the tool roster exactly and `enabled` equals each tool's `readOnlyHint` snapshot, so an annotation change forces a decision here in the same diff.",
   "portal": "mcp",
   "server": "coolify",
   "default_disabled": true,
@@ -52,17 +52,17 @@
     {
       "name": "get_application",
       "enabled": true,
-      "reason": "Returns one application's configuration with secrets masked. `reveal: true` returns its credentials in plaintext; accepted because the portal is restricted to the owner's Access policy, and the same reveal is already available to that person in the Coolify UI."
+      "reason": "Returns one application's configuration with secrets masked. `reveal: true` returns its credentials in plaintext. Accepted because the portal is restricted to the owner's Access policy and the same reveal is already available to that person in the Coolify UI. The model-steering route to that reveal (evals/FINDINGS.md #4: a poisoned log line asking the model to fetch and echo credentials) is mitigated by `asUntrustedLogs` with a per-call nonce on every enabled log surface; revisit this entry if that framing is ever removed. Note this is the widest reveal left enabled: unlike `env_vars`, it returns every credential on the resource in one call, not one named key."
     },
     {
       "name": "get_database",
       "enabled": true,
-      "reason": "Returns one database's configuration with secrets masked. `reveal: true` returns its credentials in plaintext; accepted on the same grounds as get_application."
+      "reason": "Returns one database's configuration with secrets masked. `reveal: true` returns its credentials in plaintext; accepted on the same grounds, and with the same log-injection caveat, as get_application."
     },
     {
       "name": "get_service",
       "enabled": true,
-      "reason": "Returns one service's configuration with secrets masked. `reveal: true` returns its credentials in plaintext; accepted on the same grounds as get_application."
+      "reason": "Returns one service's configuration with secrets masked. `reveal: true` returns its credentials in plaintext; accepted on the same grounds, and with the same log-injection caveat, as get_application."
     },
     {
       "name": "server_resources",
@@ -97,7 +97,7 @@
     {
       "name": "search_docs",
       "enabled": true,
-      "reason": "Searches the public Coolify documentation; no instance data."
+      "reason": "Searches a bundled local index of the public Coolify documentation (src/data/coolify-docs.json); no instance data and no network egress at call time."
     },
     {
       "name": "application_logs",
@@ -167,7 +167,7 @@
     {
       "name": "tags",
       "enabled": false,
-      "reason": "`detach` removes tags from resources."
+      "reason": "Not read-only; worst case: creates tags and attaches or detaches them across resources, and `deploy` accepts a tag name, so a tag change widens what one deploy call hits."
     },
     {
       "name": "scheduled_tasks",
@@ -217,7 +217,7 @@
     {
       "name": "system",
       "enabled": false,
-      "reason": "`disable_api` cuts off API access entirely."
+      "reason": "Not read-only; worst case: `list_resources` with `include_full: true, reveal: true` bulk-dumps credentials across the whole estate (webhook secrets, basic-auth and database passwords, connection strings, compose bodies), and `disable_api` cuts off API access entirely."
     },
     {
       "name": "hetzner",

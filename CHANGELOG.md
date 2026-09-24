@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/portal-allowlist.json`: which tools the Cloudflare MCP portal (`mcp.mctl.ai`, upstream `coolify`) exposes.** Read-only tools are enabled and every tool that writes is disabled, each with its reason. `npm run check:portal-allowlist` gates it in CI against the tool roster and each tool's `readOnlyHint`, so a tool that gains a write action cannot stay enabled on the portal unnoticed.
+
 ## [3.8.0] - 2026-09-20
 
 ### Added

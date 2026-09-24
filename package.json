@@ -36,6 +36,7 @@
     "build:chunks": "node scripts/split-openapi-chunks.mjs",
     "check:chunk-drift": "node scripts/split-openapi-chunks.mjs --check",
     "check:tool-count": "node scripts/check-tool-count.mjs",
+    "check:portal-allowlist": "node scripts/check-portal-allowlist.mjs",
     "check:tool-count:fix": "node scripts/check-tool-count.mjs --fix",
     "docs:index": "node scripts/build-docs-index.mjs",
     "docs:index:check": "node scripts/build-docs-index.mjs --check",
