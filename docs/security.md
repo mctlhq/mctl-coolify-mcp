@@ -95,6 +95,12 @@ Document). That fetch goes through the SSRF guard in `src/lib/ssrf.ts`
 rate-limited per IP, and reports one generic sentence on failure so the
 authorize page cannot be used to probe other hosts.
 
+On the mctl Cloudflare MCP portal (`mcp.mctl.ai`), this server is exposed
+through [`docs/portal-allowlist.json`](portal-allowlist.json): read-only tools
+are enabled, every tool that writes is disabled, and `npm run
+check:portal-allowlist` keeps that in step with each tool's `readOnlyHint` in
+CI.
+
 Secrets are masked at the API boundary. A client granted "list" access never
 sees plaintext credentials unless you explicitly opt in with `reveal: true`:
 
