@@ -1,5 +1,5 @@
 {
-  "$comment": "Source of truth for the Cloudflare MCP portal mapping of server `coolify` (mctlhq/mctl-gitops#1363). Every tool this server registers on the portal must appear here with an explicit decision: the tools annotated readOnlyHint in src/lib/mcp-server.ts TOOL_ANNOTATIONS are enabled, everything that writes is disabled. `list_instances` is omitted because it is registered only in fleet mode, which the portal upstream does not run. Apply with the operator-run flow shared by the other upstreams (mctl-telegram scripts/portal-allowlist-apply.sh, one file per server). CI-gated: scripts/check-portal-allowlist.mjs (npm run check:portal-allowlist) fails the build unless the listed names equal the tool roster exactly and `enabled` equals each tool's `readOnlyHint` snapshot, so an annotation change forces a decision here in the same diff.",
+  "$comment": "Source of truth for the Cloudflare MCP portal mapping of server `coolify` (mctlhq/mctl-gitops#1363). Every tool this server registers on the portal must appear here with an explicit decision: the tools annotated readOnlyHint in src/lib/mcp-server.ts TOOL_ANNOTATIONS are enabled, everything that writes is disabled. `list_instances` is omitted because it is registered only in fleet mode, which the portal upstream does not run. Apply with the operator-run flow shared by the other upstreams (mctl-telegram scripts/portal-allowlist-apply.sh, one file per server). CI-gated: scripts/check-portal-allowlist.mjs (npm run check:portal-allowlist) fails the build unless the listed names equal the tool roster exactly, no tool that is not read-only is enabled, and every read-only tool is enabled unless its entry carries `\"override\": \"sensitive-read\"`, so an annotation change forces a decision here in the same diff. It checks sync with the annotations, not behaviour. The consumer is mctlhq/mctl-gitops, which vendors this file byte-identical and validates the same keys (`portal`, `server`, `default_disabled`, `tools[].name/enabled/reason`, optional `override`) before OpenTofu applies `name` and `enabled` (mctlhq/mctl-gitops#1370); change the shape in both places together.",
   "portal": "mcp",
   "server": "coolify",
   "default_disabled": true,
@@ -97,7 +97,7 @@
     {
       "name": "search_docs",
       "enabled": true,
-      "reason": "Searches a bundled local index of the public Coolify documentation (src/data/coolify-docs.json); no instance data and no network egress at call time."
+      "reason": "Searches a bundled local index of the public Coolify documentation (src/data/coolify-docs.json); no instance data. On first use it makes one best-effort, credential-free background refresh from coolify.io/docs/llms.txt (#373), bounded to 5 s, and serves the bundle if that fails."
     },
     {
       "name": "application_logs",
