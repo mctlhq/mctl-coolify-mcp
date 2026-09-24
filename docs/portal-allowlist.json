@@ -1,0 +1,233 @@
+{
+  "$comment": "Source of truth for the Cloudflare MCP portal mapping of server `coolify` (mctlhq/mctl-gitops#1363). Every tool this server registers on the portal must appear here with an explicit decision: the tools annotated readOnlyHint in src/lib/mcp-server.ts TOOL_ANNOTATIONS are enabled, everything that writes is disabled. `list_instances` is omitted because it is registered only in fleet mode, which the portal upstream does not run. Apply with the operator-run flow shared by the other upstreams (mctl-telegram scripts/portal-allowlist-apply.sh, one file per server).",
+  "portal": "mcp",
+  "server": "coolify",
+  "default_disabled": true,
+  "tools": [
+    {
+      "name": "get_version",
+      "enabled": true,
+      "reason": "Reports the Coolify version; no resource data."
+    },
+    {
+      "name": "get_mcp_version",
+      "enabled": true,
+      "reason": "Reports this server's own version from a local constant; touches nothing external."
+    },
+    {
+      "name": "get_infrastructure_overview",
+      "enabled": true,
+      "reason": "Summarises servers, projects, applications, databases and services with their status; read-only."
+    },
+    {
+      "name": "list_servers",
+      "enabled": true,
+      "reason": "Lists servers as uuid, name and status; read-only."
+    },
+    {
+      "name": "list_applications",
+      "enabled": true,
+      "reason": "Lists applications as uuid, name and status; read-only."
+    },
+    {
+      "name": "list_databases",
+      "enabled": true,
+      "reason": "Lists databases as uuid, name and status; read-only."
+    },
+    {
+      "name": "list_services",
+      "enabled": true,
+      "reason": "Lists services as uuid, name and status; read-only."
+    },
+    {
+      "name": "list_deployments",
+      "enabled": true,
+      "reason": "Lists deployments and their state; read-only."
+    },
+    {
+      "name": "get_server",
+      "enabled": true,
+      "reason": "Returns one server's configuration; read-only."
+    },
+    {
+      "name": "get_application",
+      "enabled": true,
+      "reason": "Returns one application's configuration with secrets masked. `reveal: true` returns its credentials in plaintext; accepted because the portal is restricted to the owner's Access policy, and the same reveal is already available to that person in the Coolify UI."
+    },
+    {
+      "name": "get_database",
+      "enabled": true,
+      "reason": "Returns one database's configuration with secrets masked. `reveal: true` returns its credentials in plaintext; accepted on the same grounds as get_application."
+    },
+    {
+      "name": "get_service",
+      "enabled": true,
+      "reason": "Returns one service's configuration with secrets masked. `reveal: true` returns its credentials in plaintext; accepted on the same grounds as get_application."
+    },
+    {
+      "name": "server_resources",
+      "enabled": true,
+      "reason": "Lists the resources running on a server; read-only."
+    },
+    {
+      "name": "server_domains",
+      "enabled": true,
+      "reason": "Lists the domains a server serves; read-only."
+    },
+    {
+      "name": "list_destinations",
+      "enabled": true,
+      "reason": "Lists deployment destinations (Docker networks); read-only."
+    },
+    {
+      "name": "diagnose_app",
+      "enabled": true,
+      "reason": "Explains one application's health from status, deployments and logs; read-only."
+    },
+    {
+      "name": "diagnose_server",
+      "enabled": true,
+      "reason": "Explains one server's health; read-only."
+    },
+    {
+      "name": "find_issues",
+      "enabled": true,
+      "reason": "Scans the estate for unhealthy resources; read-only."
+    },
+    {
+      "name": "search_docs",
+      "enabled": true,
+      "reason": "Searches the public Coolify documentation; no instance data."
+    },
+    {
+      "name": "application_logs",
+      "enabled": true,
+      "reason": "Returns an application's container logs; read-only, may contain whatever the application itself logs."
+    },
+    {
+      "name": "logs",
+      "enabled": true,
+      "reason": "Returns logs for a resource; read-only, may contain whatever the resource itself logs."
+    },
+    {
+      "name": "teams",
+      "enabled": true,
+      "reason": "Lists Coolify teams and their members; read-only."
+    },
+    {
+      "name": "application",
+      "enabled": false,
+      "reason": "Includes delete, stop and configuration replace."
+    },
+    {
+      "name": "database",
+      "enabled": false,
+      "reason": "Includes delete, stop and configuration replace."
+    },
+    {
+      "name": "service",
+      "enabled": false,
+      "reason": "Includes delete, stop and configuration replace."
+    },
+    {
+      "name": "projects",
+      "enabled": false,
+      "reason": "Includes project delete."
+    },
+    {
+      "name": "environments",
+      "enabled": false,
+      "reason": "Includes environment delete."
+    },
+    {
+      "name": "env_vars",
+      "enabled": false,
+      "reason": "Writes and deletes environment variables, and reveals their values."
+    },
+    {
+      "name": "private_keys",
+      "enabled": false,
+      "reason": "Creates, replaces and deletes SSH private keys."
+    },
+    {
+      "name": "github_apps",
+      "enabled": false,
+      "reason": "Creates, replaces and deletes GitHub App credentials."
+    },
+    {
+      "name": "cloud_tokens",
+      "enabled": false,
+      "reason": "Creates, replaces and deletes cloud provider tokens."
+    },
+    {
+      "name": "storages",
+      "enabled": false,
+      "reason": "Creates and deletes persistent storage."
+    },
+    {
+      "name": "tags",
+      "enabled": false,
+      "reason": "`detach` removes tags from resources."
+    },
+    {
+      "name": "scheduled_tasks",
+      "enabled": false,
+      "reason": "Creates and deletes scheduled tasks that run commands in containers."
+    },
+    {
+      "name": "database_backups",
+      "enabled": false,
+      "reason": "Deletes backups and changes backup schedules."
+    },
+    {
+      "name": "control",
+      "enabled": false,
+      "reason": "Starts, stops and restarts running resources."
+    },
+    {
+      "name": "deploy",
+      "enabled": false,
+      "reason": "A deploy replaces the running containers."
+    },
+    {
+      "name": "deployment",
+      "enabled": false,
+      "reason": "`cancel` kills an in-flight deployment."
+    },
+    {
+      "name": "stop_all_apps",
+      "enabled": false,
+      "reason": "Stops every application at once."
+    },
+    {
+      "name": "bulk_env_update",
+      "enabled": false,
+      "reason": "Rewrites environment variables across many applications."
+    },
+    {
+      "name": "redeploy_project",
+      "enabled": false,
+      "reason": "Redeploys every application in a project."
+    },
+    {
+      "name": "restart_project_apps",
+      "enabled": false,
+      "reason": "Restarts every application in a project."
+    },
+    {
+      "name": "system",
+      "enabled": false,
+      "reason": "`disable_api` cuts off API access entirely."
+    },
+    {
+      "name": "hetzner",
+      "enabled": false,
+      "reason": "Provisions Hetzner servers and spends real money."
+    },
+    {
+      "name": "validate_server",
+      "enabled": false,
+      "reason": "Runs validation commands on a server over SSH."
+    }
+  ]
+}
