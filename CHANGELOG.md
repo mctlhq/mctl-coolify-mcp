@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`docs/portal-allowlist.json`: which tools the Cloudflare MCP portal (`mcp.mctl.ai`, upstream `coolify`) exposes.** Read-only tools are enabled and every tool that writes is disabled, each with its reason. `npm run check:portal-allowlist` gates it in CI against the tool roster and each tool's `readOnlyHint`, so a tool that gains a write action cannot stay enabled on the portal unnoticed.
+- **`.github/workflows/portal-allowlist-dispatch.yml` publishes that file.** A change to `docs/portal-allowlist.json` on `main` is checked again and sent to mctlhq/mctl-gitops, which vendors it byte-identical and opens a PR; the portal changes only after that PR merges and an approved OpenTofu apply runs (mctlhq/mctl-gitops#1370).
 
 ## [3.8.0] - 2026-09-20
 
