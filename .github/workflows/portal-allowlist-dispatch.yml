@@ -27,6 +27,7 @@ jobs:
   dispatch:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
@@ -36,6 +37,11 @@ jobs:
       # into mctl-gitops (mctlhq/mctl-gitops#761): actions:write there and
       # nothing else. It cannot push to mctl-gitops; the vendor workflow
       # there mints its own token to open the PR.
+      # push: main also covers an admin push that skipped the PR gate, so
+      # the file is checked against the roster again before it leaves.
+      - name: Check the allowlist before publishing it
+        run: node scripts/check-portal-allowlist.mjs
+
       - name: Generate a dispatch token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0

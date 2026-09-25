@@ -99,7 +99,9 @@ On the mctl Cloudflare MCP portal (`mcp.mctl.ai`), this server is exposed
 through [`docs/portal-allowlist.json`](portal-allowlist.json): read-only tools
 are enabled, every tool that writes is disabled, and `npm run
 check:portal-allowlist` keeps that in step with each tool's `readOnlyHint` in
-CI.
+CI. A change on `main` is published to mctlhq/mctl-gitops by
+`.github/workflows/portal-allowlist-dispatch.yml`; the portal changes only
+through the reviewed PR and OpenTofu apply there.
 
 Secrets are masked at the API boundary. A client granted "list" access never
 sees plaintext credentials unless you explicitly opt in with `reveal: true`:
