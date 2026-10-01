@@ -36,11 +36,15 @@ jobs:
         with:
           github-token: '${{ secrets.GITHUB_TOKEN }}'
 
+      # evals/ bumps are left for a human. `main` has no required status checks,
+      # so an armed merge fires before evals.yml's contract job reports, and
+      # that job is static only: the LLM evals that would catch a behaviour
+      # change in `ai`/`@ai-sdk/*`/promptfoo get no secrets on Dependabot PRs.
       # Must come before arming the merge. Without an approval the merge is
       # armed and then waits forever on the required-review rule, which is
       # exactly what this workflow did — greenly — for 24 runs.
       - name: Approve patch and minor updates
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        if: steps.metadata.outputs.directory != '/evals' && (steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor')
         # A re-run on `synchronize` re-approves an already-approved PR. If the
         # API ever rejects that, failing here would skip the merge step and
         # leave auto-merge unarmed — reintroducing the exact bug this fixes.
@@ -51,7 +55,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Auto-merge patch and minor updates
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        if: steps.metadata.outputs.directory != '/evals' && (steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor')
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
