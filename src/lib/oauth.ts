@@ -533,6 +533,15 @@ export class OAuthProvider {
     document: unknown,
   ): RegisteredClient {
     const invalid = (why: string): never => {
+      // The rejection page goes to the person's browser, not to us; without
+      // this line a client we refuse leaves no trace on the server at all.
+      // `why` can quote document content (a redirect URI), and the document
+      // is attacker-hosted: JSON-encode it so a newline cannot forge a line.
+      // Capped too: the quote can be most of an 8 KB document.
+      const logged = why.length > 300 ? `${why.slice(0, 300)}…` : why;
+      console.error(
+        `oauth: client metadata document for ${url.host} rejected: ${JSON.stringify(logged)}`,
+      );
       throw new OAuthErrorResponse('invalid_client', `client_id metadata document ${why}`, 401);
     };
     if (typeof document !== 'object' || document === null || Array.isArray(document)) {
@@ -562,8 +571,33 @@ export class OAuthProvider {
 
     // A document is public by construction, so it cannot carry a shared
     // secret and cannot ask to authenticate with one.
-    const method = doc.token_endpoint_auth_method ?? 'none';
-    if (method !== 'none') invalid('may only use token_endpoint_auth_method "none"');
+    //
+    // The singular `token_endpoint_auth_method` is the client's preference.
+    // `token_endpoint_auth_methods_supported` is NOT an RFC 7591 client
+    // field — it is the authorization-server metadata name — but ChatGPT
+    // publishes it in its document to say what it can do: it prefers
+    // private_key_jwt, lists ["none", "private_key_jwt"], and picks from the
+    // intersection with our advertised methods, which is "none". Reading only
+    // the preference refused ChatGPT outright, so a document that lists
+    // "none" here is a public client whatever it prefers. The stored client
+    // is "none" regardless (below), so no secret or assertion path opens.
+    const supported = doc.token_endpoint_auth_methods_supported;
+    if (supported === undefined) {
+      if ((doc.token_endpoint_auth_method ?? 'none') !== 'none') {
+        invalid('may only use token_endpoint_auth_method "none"');
+      }
+    } else {
+      if (
+        !Array.isArray(supported) ||
+        supported.length === 0 ||
+        !supported.every((m) => typeof m === 'string')
+      ) {
+        invalid('token_endpoint_auth_methods_supported must be a non-empty list of strings');
+      }
+      if (!(supported as string[]).includes('none')) {
+        invalid('must list "none" in token_endpoint_auth_methods_supported');
+      }
+    }
     if ('client_secret' in doc || 'client_secret_expires_at' in doc) {
       invalid('must not carry a client_secret');
     }

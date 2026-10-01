@@ -1269,6 +1269,41 @@ describe('Client ID Metadata Documents (#340)', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts a client that prefers private_key_jwt but lists none as supported (ChatGPT)', async () => {
+    // ChatGPT's published document, https://chatgpt.com/oauth/client.json,
+    // as fetched on 2026-10-02, with its URLs swapped for the test client's.
+    const chatgptShaped = {
+      ...goodDocument(),
+      client_name: 'ChatGPT',
+      token_endpoint_auth_method: 'private_key_jwt',
+      token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      token_endpoint_auth_signing_alg: 'RS256',
+      jwks_uri: 'https://client.example.com/oauth/jwks.json',
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+    };
+    const provider = makeCimdProvider(async () => chatgptShaped);
+    const { verifier, challenge } = pkcePair();
+
+    await provider.resolveClient(CLIENT_URL);
+    const validated = provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, challenge));
+    expect(validated.client.token_endpoint_auth_method).toBe('none');
+
+    const { redirectTo } = provider.completeAuthorization(validated);
+    const code = new URL(redirectTo).searchParams.get('code')!;
+    // No client assertion: the token leg is PKCE alone, as for any public client.
+    const tokens = provider.exchange(
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CLIENT_URL,
+        code,
+        redirect_uri: CALLBACK,
+        code_verifier: verifier,
+      }),
+    );
+    expect(tokens.access_token).toEqual(expect.any(String));
+  });
+
   it('is a no-op for registered ids and for ids that are not URLs', async () => {
     const fetcher = jest.fn(async () => goodDocument());
     const provider = makeCimdProvider(fetcher);
@@ -1312,25 +1347,99 @@ describe('Client ID Metadata Documents (#340)', () => {
       { ...goodDocument(), token_endpoint_auth_method: 'client_secret_post' },
       '"none"',
     ],
+    [
+      'supported methods that exclude none',
+      {
+        ...goodDocument(),
+        token_endpoint_auth_method: 'private_key_jwt',
+        token_endpoint_auth_methods_supported: ['private_key_jwt'],
+      },
+      'must list "none" in token_endpoint_auth_methods_supported',
+    ],
+    [
+      'a malformed supported-methods list',
+      { ...goodDocument(), token_endpoint_auth_methods_supported: 'none' },
+      'non-empty list of strings',
+    ],
+    [
+      'an empty supported-methods list',
+      { ...goodDocument(), token_endpoint_auth_methods_supported: [] },
+      'non-empty list of strings',
+    ],
     ['embedded secret', { ...goodDocument(), client_secret: 'nope' }, 'client_secret'],
     ['not an object', ['nope'], 'JSON object'],
   ])(
     'rejects a document with %s and does not cache the failure',
     async (_label, document, reason) => {
-      const fetcher = jest.fn(async () => document);
-      const provider = makeCimdProvider(fetcher);
-      await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow(reason);
-      // One code for everything wrong with a document, on every leg.
-      await expect(provider.resolveClient(CLIENT_URL)).rejects.toMatchObject({
-        code: 'invalid_client',
-        status: 401,
-      });
-      expect(fetcher).toHaveBeenCalledTimes(2);
-      expect(() => provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, 'x'))).toThrow(
-        /unknown client_id/,
-      );
+      const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const fetcher = jest.fn(async () => document);
+        const provider = makeCimdProvider(fetcher);
+        await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow(reason);
+        // One code for everything wrong with a document, on every leg.
+        await expect(provider.resolveClient(CLIENT_URL)).rejects.toMatchObject({
+          code: 'invalid_client',
+          status: 401,
+        });
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(() =>
+          provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, 'x')),
+        ).toThrow(/unknown client_id/);
+        // The refusal reaches the operator, not only the person's browser.
+        expect(stderr).toHaveBeenCalledWith(
+          expect.stringContaining('client metadata document for client.example.com rejected:'),
+        );
+      } finally {
+        stderr.mockRestore();
+      }
     },
   );
+
+  it('logs a refused document on one line even when it quotes a newline from the document', async () => {
+    const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // The space makes it unparseable, so the description quotes it raw,
+      // newline included; `new URL` alone would strip the newline.
+      const provider = makeCimdProvider(async () => ({
+        ...goodDocument(),
+        redirect_uris: ['https://bad host/\noauth: forged line'],
+      }));
+      await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow('not a valid URL');
+      expect(stderr).toHaveBeenCalledTimes(1);
+      const line = String(stderr.mock.calls[0]?.[0]);
+      expect(line).toContain('forged line');
+      expect(line).not.toContain('\n');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('caps the quoted reason in a refusal log line', async () => {
+    const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const provider = makeCimdProvider(async () => ({
+        ...goodDocument(),
+        redirect_uris: [`https://bad host/${'a'.repeat(5000)}`],
+      }));
+      await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow('not a valid URL');
+      expect(String(stderr.mock.calls[0]?.[0]).length).toBeLessThan(500);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('accepts none among supported methods even when the preference is a secret method', async () => {
+    // Contradictory, but harmless: the stored client is public either way.
+    const provider = makeCimdProvider(async () => ({
+      ...goodDocument(),
+      token_endpoint_auth_method: 'client_secret_basic',
+      token_endpoint_auth_methods_supported: ['none', 'client_secret_basic'],
+    }));
+    await provider.resolveClient(CLIENT_URL);
+    const validated = provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, 'x'));
+    expect(validated.client.token_endpoint_auth_method).toBe('none');
+    expect(validated.client.client_secret_hash).toBeUndefined();
+  });
 
   it('surfaces a fetch failure as a generic invalid_client, logs the detail, and retries next time', async () => {
     const fetcher = jest
