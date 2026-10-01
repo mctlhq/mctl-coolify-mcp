@@ -9,14 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.8.1] - 2026-10-02
 
-### Fixed
-
-- **ChatGPT can connect over a Client ID Metadata Document.** Its document (`https://chatgpt.com/oauth/client.json`) prefers `token_endpoint_auth_method: "private_key_jwt"` but lists `["none", "private_key_jwt"]` as supported, and ChatGPT picks from the intersection with what the server advertises, which is `none`. The check read only the singular preference, so `/authorize` refused ChatGPT with "may only use token_endpoint_auth_method \"none\"". A document is now accepted when `none` is among its supported methods, and still refused when it is not. A refused document is also logged, with its host and the reason; before, a rejection left no trace on the server.
-
 ### Added
 
 - **`docs/portal-allowlist.json`: which tools the Cloudflare MCP portal (`mcp.mctl.ai`, upstream `coolify`) exposes.** Read-only tools are enabled and every tool that writes is disabled, each with its reason. `npm run check:portal-allowlist` gates it in CI against the tool roster and each tool's `readOnlyHint`, so a tool that gains a write action cannot stay enabled on the portal unnoticed.
 - **`.github/workflows/portal-allowlist-dispatch.yml` publishes that file.** A change to `docs/portal-allowlist.json` on `main` is checked again and sent to mctlhq/mctl-gitops, which vendors it byte-identical and opens a PR; the portal changes only after that PR merges and an approved OpenTofu apply runs (mctlhq/mctl-gitops#1370).
+
+### Fixed
+
+- **ChatGPT can connect over a Client ID Metadata Document.** Its document (`https://chatgpt.com/oauth/client.json`) prefers `token_endpoint_auth_method: "private_key_jwt"` but lists `["none", "private_key_jwt"]` as supported, and ChatGPT picks from the intersection with what the server advertises, which is `none`. The check read only the singular preference, so `/authorize` refused ChatGPT with "may only use token_endpoint_auth_method \"none\"". A document is now accepted when `none` is among its supported methods, and still refused when it is not. A refused document is also logged, with its host and the reason; before, a rejection left no trace on the server.
 
 ## [3.8.0] - 2026-09-20
 
