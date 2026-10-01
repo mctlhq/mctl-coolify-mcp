@@ -1356,11 +1356,22 @@ describe('Client ID Metadata Documents (#340)', () => {
       },
       '"none"',
     ],
+    [
+      'a malformed supported-methods list',
+      { ...goodDocument(), token_endpoint_auth_methods_supported: 'none' },
+      'non-empty list of strings',
+    ],
+    [
+      'an empty supported-methods list',
+      { ...goodDocument(), token_endpoint_auth_methods_supported: [] },
+      'non-empty list of strings',
+    ],
     ['embedded secret', { ...goodDocument(), client_secret: 'nope' }, 'client_secret'],
     ['not an object', ['nope'], 'JSON object'],
   ])(
     'rejects a document with %s and does not cache the failure',
     async (_label, document, reason) => {
+      const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
       const fetcher = jest.fn(async () => document);
       const provider = makeCimdProvider(fetcher);
       await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow(reason);
@@ -1373,8 +1384,45 @@ describe('Client ID Metadata Documents (#340)', () => {
       expect(() => provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, 'x'))).toThrow(
         /unknown client_id/,
       );
+      // The refusal reaches the operator, not only the person's browser.
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining('client metadata document for client.example.com rejected:'),
+      );
+      stderr.mockRestore();
     },
   );
+
+  it('logs a refused document on one line even when it quotes a newline from the document', async () => {
+    const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // The space makes it unparseable, so the description quotes it raw,
+      // newline included; `new URL` alone would strip the newline.
+      const provider = makeCimdProvider(async () => ({
+        ...goodDocument(),
+        redirect_uris: ['https://bad host/\noauth: forged line'],
+      }));
+      await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow('not a valid URL');
+      expect(stderr).toHaveBeenCalledTimes(1);
+      const line = String(stderr.mock.calls[0]?.[0]);
+      expect(line).toContain('forged line');
+      expect(line).not.toContain('\n');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('accepts none among supported methods even when the preference is a secret method', async () => {
+    // Contradictory, but harmless: the stored client is public either way.
+    const provider = makeCimdProvider(async () => ({
+      ...goodDocument(),
+      token_endpoint_auth_method: 'client_secret_basic',
+      token_endpoint_auth_methods_supported: ['none', 'client_secret_basic'],
+    }));
+    await provider.resolveClient(CLIENT_URL);
+    const validated = provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, 'x'));
+    expect(validated.client.token_endpoint_auth_method).toBe('none');
+    expect(validated.client.client_secret_hash).toBeUndefined();
+  });
 
   it('surfaces a fetch failure as a generic invalid_client, logs the detail, and retries next time', async () => {
     const fetcher = jest
