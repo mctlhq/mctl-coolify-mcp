@@ -533,6 +533,9 @@ export class OAuthProvider {
     document: unknown,
   ): RegisteredClient {
     const invalid = (why: string): never => {
+      // The rejection page goes to the person's browser, not to us; without
+      // this line a client we refuse leaves no trace on the server at all.
+      console.error(`oauth: client metadata document for ${url.host} rejected: ${why}`);
       throw new OAuthErrorResponse('invalid_client', `client_id metadata document ${why}`, 401);
     };
     if (typeof document !== 'object' || document === null || Array.isArray(document)) {
@@ -562,8 +565,19 @@ export class OAuthProvider {
 
     // A document is public by construction, so it cannot carry a shared
     // secret and cannot ask to authenticate with one.
-    const method = doc.token_endpoint_auth_method ?? 'none';
-    if (method !== 'none') invalid('may only use token_endpoint_auth_method "none"');
+    //
+    // The singular `token_endpoint_auth_method` is the client's preference;
+    // `token_endpoint_auth_methods_supported` is what it can do. ChatGPT
+    // prefers private_key_jwt and lists ["none", "private_key_jwt"], then
+    // picks from the intersection with our advertised methods — which is
+    // "none". So a document that lists "none" as supported is a public
+    // client whatever it prefers; one that cannot do "none" is refused.
+    const supported = doc.token_endpoint_auth_methods_supported;
+    const canUseNone =
+      Array.isArray(supported) && supported.length > 0
+        ? supported.includes('none')
+        : (doc.token_endpoint_auth_method ?? 'none') === 'none';
+    if (!canUseNone) invalid('may only use token_endpoint_auth_method "none"');
     if ('client_secret' in doc || 'client_secret_expires_at' in doc) {
       invalid('must not carry a client_secret');
     }

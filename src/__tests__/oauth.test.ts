@@ -1269,6 +1269,41 @@ describe('Client ID Metadata Documents (#340)', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts a client that prefers private_key_jwt but lists none as supported (ChatGPT)', async () => {
+    // ChatGPT's published document, https://chatgpt.com/oauth/client.json,
+    // as fetched on 2026-10-02, with its URLs swapped for the test client's.
+    const chatgptShaped = {
+      ...goodDocument(),
+      client_name: 'ChatGPT',
+      token_endpoint_auth_method: 'private_key_jwt',
+      token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      token_endpoint_auth_signing_alg: 'RS256',
+      jwks_uri: 'https://client.example.com/oauth/jwks.json',
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+    };
+    const provider = makeCimdProvider(async () => chatgptShaped);
+    const { verifier, challenge } = pkcePair();
+
+    await provider.resolveClient(CLIENT_URL);
+    const validated = provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, challenge));
+    expect(validated.client.token_endpoint_auth_method).toBe('none');
+
+    const { redirectTo } = provider.completeAuthorization(validated);
+    const code = new URL(redirectTo).searchParams.get('code')!;
+    // No client assertion: the token leg is PKCE alone, as for any public client.
+    const tokens = provider.exchange(
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CLIENT_URL,
+        code,
+        redirect_uri: CALLBACK,
+        code_verifier: verifier,
+      }),
+    );
+    expect(tokens.access_token).toEqual(expect.any(String));
+  });
+
   it('is a no-op for registered ids and for ids that are not URLs', async () => {
     const fetcher = jest.fn(async () => goodDocument());
     const provider = makeCimdProvider(fetcher);
@@ -1310,6 +1345,15 @@ describe('Client ID Metadata Documents (#340)', () => {
     [
       'secret-based auth',
       { ...goodDocument(), token_endpoint_auth_method: 'client_secret_post' },
+      '"none"',
+    ],
+    [
+      'supported methods that exclude none',
+      {
+        ...goodDocument(),
+        token_endpoint_auth_method: 'private_key_jwt',
+        token_endpoint_auth_methods_supported: ['private_key_jwt'],
+      },
       '"none"',
     ],
     ['embedded secret', { ...goodDocument(), client_secret: 'nope' }, 'client_secret'],
