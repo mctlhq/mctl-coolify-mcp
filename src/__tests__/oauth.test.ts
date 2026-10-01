@@ -1354,7 +1354,7 @@ describe('Client ID Metadata Documents (#340)', () => {
         token_endpoint_auth_method: 'private_key_jwt',
         token_endpoint_auth_methods_supported: ['private_key_jwt'],
       },
-      '"none"',
+      'must list "none" in token_endpoint_auth_methods_supported',
     ],
     [
       'a malformed supported-methods list',
@@ -1372,23 +1372,26 @@ describe('Client ID Metadata Documents (#340)', () => {
     'rejects a document with %s and does not cache the failure',
     async (_label, document, reason) => {
       const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
-      const fetcher = jest.fn(async () => document);
-      const provider = makeCimdProvider(fetcher);
-      await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow(reason);
-      // One code for everything wrong with a document, on every leg.
-      await expect(provider.resolveClient(CLIENT_URL)).rejects.toMatchObject({
-        code: 'invalid_client',
-        status: 401,
-      });
-      expect(fetcher).toHaveBeenCalledTimes(2);
-      expect(() => provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, 'x'))).toThrow(
-        /unknown client_id/,
-      );
-      // The refusal reaches the operator, not only the person's browser.
-      expect(stderr).toHaveBeenCalledWith(
-        expect.stringContaining('client metadata document for client.example.com rejected:'),
-      );
-      stderr.mockRestore();
+      try {
+        const fetcher = jest.fn(async () => document);
+        const provider = makeCimdProvider(fetcher);
+        await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow(reason);
+        // One code for everything wrong with a document, on every leg.
+        await expect(provider.resolveClient(CLIENT_URL)).rejects.toMatchObject({
+          code: 'invalid_client',
+          status: 401,
+        });
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(() =>
+          provider.validateAuthorizationRequest(authorizeParams(CLIENT_URL, 'x')),
+        ).toThrow(/unknown client_id/);
+        // The refusal reaches the operator, not only the person's browser.
+        expect(stderr).toHaveBeenCalledWith(
+          expect.stringContaining('client metadata document for client.example.com rejected:'),
+        );
+      } finally {
+        stderr.mockRestore();
+      }
     },
   );
 
@@ -1406,6 +1409,20 @@ describe('Client ID Metadata Documents (#340)', () => {
       const line = String(stderr.mock.calls[0]?.[0]);
       expect(line).toContain('forged line');
       expect(line).not.toContain('\n');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('caps the quoted reason in a refusal log line', async () => {
+    const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const provider = makeCimdProvider(async () => ({
+        ...goodDocument(),
+        redirect_uris: [`https://bad host/${'a'.repeat(5000)}`],
+      }));
+      await expect(provider.resolveClient(CLIENT_URL)).rejects.toThrow('not a valid URL');
+      expect(String(stderr.mock.calls[0]?.[0]).length).toBeLessThan(500);
     } finally {
       stderr.mockRestore();
     }

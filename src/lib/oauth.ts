@@ -537,8 +537,10 @@ export class OAuthProvider {
       // this line a client we refuse leaves no trace on the server at all.
       // `why` can quote document content (a redirect URI), and the document
       // is attacker-hosted: JSON-encode it so a newline cannot forge a line.
+      // Capped too: the quote can be most of an 8 KB document.
+      const logged = why.length > 300 ? `${why.slice(0, 300)}…` : why;
       console.error(
-        `oauth: client metadata document for ${url.host} rejected: ${JSON.stringify(why)}`,
+        `oauth: client metadata document for ${url.host} rejected: ${JSON.stringify(logged)}`,
       );
       throw new OAuthErrorResponse('invalid_client', `client_id metadata document ${why}`, 401);
     };
@@ -580,9 +582,10 @@ export class OAuthProvider {
     // "none" here is a public client whatever it prefers. The stored client
     // is "none" regardless (below), so no secret or assertion path opens.
     const supported = doc.token_endpoint_auth_methods_supported;
-    let canUseNone: boolean;
     if (supported === undefined) {
-      canUseNone = (doc.token_endpoint_auth_method ?? 'none') === 'none';
+      if ((doc.token_endpoint_auth_method ?? 'none') !== 'none') {
+        invalid('may only use token_endpoint_auth_method "none"');
+      }
     } else {
       if (
         !Array.isArray(supported) ||
@@ -591,9 +594,10 @@ export class OAuthProvider {
       ) {
         invalid('token_endpoint_auth_methods_supported must be a non-empty list of strings');
       }
-      canUseNone = (supported as string[]).includes('none');
+      if (!(supported as string[]).includes('none')) {
+        invalid('must list "none" in token_endpoint_auth_methods_supported');
+      }
     }
-    if (!canUseNone) invalid('may only use token_endpoint_auth_method "none"');
     if ('client_secret' in doc || 'client_secret_expires_at' in doc) {
       invalid('must not carry a client_secret');
     }

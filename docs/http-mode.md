@@ -136,7 +136,11 @@ SSRF guard as every other outbound fetch) or, for older clients, dynamic
 registration at `/register`. There is nothing to pre-configure. If you ship
 a client with a metadata document, its URL has to stay up: the server
 re-fetches it hourly, tolerates a day of the host being down by keeping the
-last good copy, and after that clients re-authorize.
+last good copy, and after that clients re-authorize. A metadata-document
+client must be able to act as a public client (`none` + PKCE): the server
+accepts it when `none` is its `token_endpoint_auth_method` or appears in its
+`token_endpoint_auth_methods_supported`, and otherwise refuses it and logs
+`oauth: client metadata document for <host> rejected: ...`.
 
 - **Claude Desktop / claude.ai:** Settings → Connectors → Add custom
   connector → paste the `/mcp` URL. Your browser opens the authorize page.
@@ -148,6 +152,11 @@ last good copy, and after that clients re-authorize.
   ```
 
   Then `/mcp` → authenticate.
+
+- **ChatGPT:** add a custom connector with the `/mcp` URL and OAuth
+  authentication. ChatGPT registers through its metadata document
+  (`https://chatgpt.com/oauth/client.json`), which prefers `private_key_jwt`
+  but supports `none`, so it connects as a public client.
 
 ## How authentication works
 
