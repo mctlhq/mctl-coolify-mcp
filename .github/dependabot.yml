@@ -1,8 +1,14 @@
 version: 2
 updates:
   # npm dependencies
+  # evals/ has its own lockfile and exact pins. It is not covered by the root
+  # `npm audit` in ci.yml, so without this entry it drifted to 25 advisories
+  # before anyone noticed (#9). Its PRs follow the same auto-merge policy as
+  # the root ones; the evals contract job is what checks them.
   - package-ecosystem: 'npm'
-    directory: '/'
+    directories:
+      - '/'
+      - '/evals'
     schedule:
       interval: 'daily'
       time: '06:00'
