@@ -583,11 +583,14 @@ interface OidcDiscovery {
 }
 
 const discoveryCache = new Map<string, { value: OidcDiscovery; fetchedAt: number }>();
+/** Discovery fetches in flight, so concurrent logins share one request. */
+const discoveryInFlight = new Map<string, Promise<OidcDiscovery>>();
 const jwksCache = new Map<string, { keys: Jwk[]; fetchedAt: number }>();
 
 /** Forget every discovered document and key set. For tests. */
 export function clearOidcCache(): void {
   discoveryCache.clear();
+  discoveryInFlight.clear();
   jwksCache.clear();
 }
 
@@ -600,6 +603,8 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
     throw new IdentityError('Could not reach the identity provider. Try again.');
   });
   if (!response.ok) {
+    // Release the connection rather than leaving the unread body to GC.
+    await response.body?.cancel().catch(() => undefined);
     throw new IdentityError(
       init?.method === 'POST'
         ? 'The identity provider rejected the login.'
@@ -620,12 +625,22 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
  * The document is believed only if it names the configured issuer exactly
  * (OIDC Discovery §4.3) and every endpoint is https on the issuer's own
  * origin, so a discovery answer cannot send the code, the client secret or
- * the key lookup anywhere else. A failed fetch is never cached.
+ * the key lookup anywhere else. A failed fetch is never cached; concurrent
+ * callers share the one fetch in flight.
  */
 async function discover(creds: OidcProviderCredentials): Promise<OidcDiscovery> {
   const cached = discoveryCache.get(creds.issuer);
   if (cached && Date.now() - cached.fetchedAt < OIDC_CACHE_TTL_MS) return cached.value;
 
+  let pending = discoveryInFlight.get(creds.issuer);
+  if (!pending) {
+    pending = fetchDiscovery(creds).finally(() => discoveryInFlight.delete(creds.issuer));
+    discoveryInFlight.set(creds.issuer, pending);
+  }
+  return pending;
+}
+
+async function fetchDiscovery(creds: OidcProviderCredentials): Promise<OidcDiscovery> {
   const doc = (await fetchJson(`${creds.issuer}/.well-known/openid-configuration`, {
     headers: { accept: 'application/json' },
   })) as Record<string, unknown> | null;
@@ -752,6 +767,10 @@ async function exchangeZitadel(
  * RS256 only — what ZITADEL signs with. Accepting the header's `alg` as given
  * is the classic JWT downgrade (`none`, or HS256 keyed with the public key),
  * so the algorithm is fixed here and the header may only agree with it.
+ *
+ * Exported for the tests only. Production calls it from `exchangeZitadel`
+ * with the `jwks_uri` that `discover` has already checked is on the issuer's
+ * origin; a caller passing any other key-set URL loses that guarantee.
  */
 export async function verifyIdToken(
   idToken: string,

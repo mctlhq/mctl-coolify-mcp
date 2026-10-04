@@ -306,9 +306,15 @@ describe('ZITADEL as the identity provider', () => {
     const chooserHtml = await authorize.text();
     expect(chooserHtml).toContain('Continue with GitHub');
     expect(chooserHtml).toContain('Continue with Google');
-    const zitadelHref = /href="([^"]*)">Continue with MCTL account/
+    const startHref = /href="([^"]*)">Continue with MCTL account/
       .exec(chooserHtml)![1]
       .replace(/&amp;/g, '&');
+    // The chooser links to this server, not the issuer: nothing was fetched yet.
+    expect(new URL(startHref).pathname).toBe('/auth/zitadel/start');
+    expect(issuer.hits.discovery).toBe(0);
+    const start = await app.fetch(new Request(startHref));
+    expect(start.status).toBe(302);
+    const zitadelHref = start.headers.get('location')!;
     expect(new URL(zitadelHref).origin).toBe(ZITADEL_ISSUER);
     issuer.approve('the-code', zitadelHref, {
       sub: '290000000000000001',
@@ -373,6 +379,79 @@ describe('ZITADEL as the identity provider', () => {
     );
     expect(callback.status).toBe(400);
     expect(await callback.text()).toContain('rejected the login');
+  });
+});
+
+describe('ZITADEL discovery failing', () => {
+  const zitadelOnly = (issuer: FakeOidcIssuer): Record<string, unknown> => ({
+    issuer: ZITADEL_ISSUER,
+    clientId: issuer.clientId,
+    clientSecret: issuer.clientSecret,
+    callbackUrl: `${ISSUER}/auth/zitadel/callback`,
+    displayName: 'MCTL account',
+  });
+
+  it('leaves the GitHub and Google buttons working on /authorize', async () => {
+    clearOidcCache();
+    const issuer = new FakeOidcIssuer();
+    issuer.discoveryStatus = 500;
+    global.fetch = jest.fn(issuer.fetch) as unknown as typeof fetch;
+    const { app } = makeApp({
+      identity: { ...bothProvidersIdentity, zitadel: zitadelOnly(issuer) } as never,
+    });
+    const clientId = await registerClient(app);
+    const { challenge } = pkcePair();
+
+    const authorize = await app.fetch(
+      new Request(
+        `${ISSUER}/authorize?${new URLSearchParams({
+          client_id: clientId,
+          redirect_uri: CALLBACK,
+          response_type: 'code',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        })}`,
+      ),
+    );
+    expect(authorize.status).toBe(200);
+    const chooserHtml = await authorize.text();
+    expect(chooserHtml).toContain('href="https://github.com/login/oauth/authorize?');
+    expect(chooserHtml).toContain('href="https://accounts.google.com/');
+    expect(issuer.hits.discovery).toBe(0);
+
+    const startHref = /href="([^"]*)">Continue with MCTL account/
+      .exec(chooserHtml)![1]
+      .replace(/&amp;/g, '&');
+    const start = await app.fetch(new Request(startHref));
+    expect(start.status).toBe(502);
+    expect(await start.text()).toContain('MCTL account sign-in is unavailable right now');
+  });
+
+  it('shows a page, not a 500, on /enroll when ZITADEL is the only provider', async () => {
+    clearOidcCache();
+    const issuer = new FakeOidcIssuer();
+    issuer.discoveryStatus = 503;
+    global.fetch = jest.fn(issuer.fetch) as unknown as typeof fetch;
+    const { app } = makeApp({ identity: { zitadel: zitadelOnly(issuer) } as never });
+
+    const enroll = await app.fetch(new Request(`${ISSUER}/enroll`));
+    expect(enroll.status).toBe(302);
+    const start = await app.fetch(new Request(enroll.headers.get('location')!));
+    expect(start.status).toBe(502);
+    expect(await start.text()).toContain('choose another way to sign in');
+  });
+
+  it('starts a login only for a state this server sealed', async () => {
+    clearOidcCache();
+    const issuer = new FakeOidcIssuer();
+    global.fetch = jest.fn(issuer.fetch) as unknown as typeof fetch;
+    const { app } = makeApp({ identity: { zitadel: zitadelOnly(issuer) } as never });
+
+    const forged = await app.fetch(
+      new Request(`${ISSUER}/auth/zitadel/start?state=not-a-sealed-state`),
+    );
+    expect(forged.status).toBe(400);
+    expect(issuer.hits.discovery).toBe(0);
   });
 });
 

@@ -30,6 +30,8 @@ export class FakeOidcIssuer {
   private readonly codes = new Map<string, PendingCode>();
   /** Overrides applied to the discovery document, for negative tests. */
   discovery: Record<string, unknown> = {};
+  /** Set to a non-2xx status to make the discovery endpoint fail. */
+  discoveryStatus = 200;
   /** How many times each endpoint was fetched. */
   readonly hits = { discovery: 0, jwks: 0, token: 0 };
   /** Token requests as received, for asserting what the server sent. */
@@ -78,6 +80,9 @@ export class FakeOidcIssuer {
     const url = String(input);
     if (url === `${this.issuer}/.well-known/openid-configuration`) {
       this.hits.discovery++;
+      if (this.discoveryStatus !== 200) {
+        return new Response('unavailable', { status: this.discoveryStatus });
+      }
       return Response.json({
         issuer: this.issuer,
         authorization_endpoint: `${this.issuer}/oauth/v2/authorize`,

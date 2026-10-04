@@ -151,6 +151,27 @@ describe('ZITADEL login redirect', () => {
     expect(issuer.hits.discovery).toBe(1);
   });
 
+  it('shares one discovery fetch between concurrent logins, and not a failed one', async () => {
+    await Promise.all([
+      loginRedirectUrl(config, 'zitadel', 'a'),
+      loginRedirectUrl(config, 'zitadel', 'b'),
+      loginRedirectUrl(config, 'zitadel', 'c'),
+    ]);
+    expect(issuer.hits.discovery).toBe(1);
+
+    clearOidcCache();
+    issuer.discoveryStatus = 500;
+    const failed = await Promise.allSettled([
+      loginRedirectUrl(config, 'zitadel', 'a'),
+      loginRedirectUrl(config, 'zitadel', 'b'),
+    ]);
+    expect(failed.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+    expect(issuer.hits.discovery).toBe(2);
+    issuer.discoveryStatus = 200;
+    await expect(loginRedirectUrl(config, 'zitadel', 'a')).resolves.toContain(ZITADEL_ISSUER);
+    expect(issuer.hits.discovery).toBe(3);
+  });
+
   it('refuses a discovery document naming another issuer', async () => {
     issuer.discovery = { issuer: 'https://evil.example.com' };
     await expect(loginRedirectUrl(config, 'zitadel', 'a')).rejects.toThrow(

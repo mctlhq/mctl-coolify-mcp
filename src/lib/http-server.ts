@@ -367,8 +367,28 @@ function providerLabel(identity: IdentityConfig, provider: Provider): string {
 }
 
 /**
+ * Where a sign-in button (or the single-provider redirect) sends the browser.
+ *
+ * GitHub and Google URLs are built from constants. ZITADEL's needs the
+ * issuer's discovery document, so it goes through `/auth/zitadel/start`
+ * instead: the issuer is only contacted when someone actually picks it, and
+ * an issuer that is down cannot take the GitHub and Google buttons with it.
+ */
+async function providerEntryUrl(
+  identity: IdentityConfig,
+  provider: Provider,
+  state: string,
+  publicUrl: string,
+): Promise<string> {
+  if (provider === 'zitadel') {
+    return `${publicUrl}/auth/zitadel/start?${new URLSearchParams({ state }).toString()}`;
+  }
+  return loginRedirectUrl(identity, provider, state);
+}
+
+/**
  * Shown only when a deployment configures more than one identity provider.
- * The links go straight to `loginRedirectUrl`'s output — a server-computed
+ * The links go straight to `providerEntryUrl`'s output — a server-computed
  * redirect, not user input — so there is nothing here for an open-redirect
  * check to guard against.
  */
@@ -376,9 +396,10 @@ async function loginChooserPage(
   identity: IdentityConfig,
   providers: Provider[],
   state: string,
+  publicUrl: string,
 ): Promise<string> {
   const hrefs = await Promise.all(
-    providers.map((provider) => loginRedirectUrl(identity, provider, state)),
+    providers.map((provider) => providerEntryUrl(identity, provider, state, publicUrl)),
   );
   const links = providers
     .map(
@@ -597,9 +618,11 @@ export function createHttpApp(config: HttpServerConfig): {
           const state = sealLoginState(url.searchParams.toString());
           const providers = configuredProviders(config.tenancy.identity);
           if (providers.length === 1) {
-            return redirect(await loginRedirectUrl(config.tenancy.identity, providers[0], state));
+            return redirect(
+              await providerEntryUrl(config.tenancy.identity, providers[0], state, publicUrl),
+            );
           }
-          return html(await loginChooserPage(config.tenancy.identity, providers, state));
+          return html(await loginChooserPage(config.tenancy.identity, providers, state, publicUrl));
         }
         return html(
           authorizePage(url.searchParams, validated.client.client_name ?? 'An MCP client'),
@@ -679,6 +702,38 @@ export function createHttpApp(config: HttpServerConfig): {
     // at all in single-tenant mode.
     // =========================================================================
 
+    // The ZITADEL button's target (see `providerEntryUrl`): discovery happens
+    // here, behind a click and a rate limit, and a failing issuer is a page
+    // for this one provider rather than an error for every sign-in.
+    if (
+      config.tenancy?.identity.zitadel &&
+      path === '/auth/zitadel/start' &&
+      request.method === 'GET'
+    ) {
+      if (!authLimiter.allow(`zstart:${clientIp}`)) {
+        return html('<p>Too many attempts. Try again in a minute.</p>', 429);
+      }
+      const state = url.searchParams.get('state') ?? '';
+      try {
+        // Only a state this server sealed, still fresh, may start a login.
+        openLoginState(state);
+      } catch (error) {
+        return html(
+          `<p>${escapeHtml(error instanceof IdentityError ? error.message : 'The login could not be verified.')}</p>`,
+          400,
+        );
+      }
+      try {
+        return redirect(await loginRedirectUrl(config.tenancy.identity, 'zitadel', state));
+      } catch (error) {
+        if (!(error instanceof IdentityError)) throw error;
+        return html(
+          `<p>${escapeHtml(providerLabel(config.tenancy.identity, 'zitadel'))} sign-in is unavailable right now: ${escapeHtml(error.message)}</p><p>Go back and try again, or choose another way to sign in.</p>`,
+          502,
+        );
+      }
+    }
+
     const callbackProvider: Provider | undefined =
       path === '/auth/github/callback'
         ? 'github'
@@ -755,9 +810,11 @@ export function createHttpApp(config: HttpServerConfig): {
       const state = sealLoginState('');
       const providers = configuredProviders(config.tenancy.identity);
       if (providers.length === 1) {
-        return redirect(await loginRedirectUrl(config.tenancy.identity, providers[0], state));
+        return redirect(
+          await providerEntryUrl(config.tenancy.identity, providers[0], state, publicUrl),
+        );
       }
-      return html(await loginChooserPage(config.tenancy.identity, providers, state));
+      return html(await loginChooserPage(config.tenancy.identity, providers, state, publicUrl));
     }
 
     if (config.tenancy && path === '/enroll' && request.method === 'POST') {

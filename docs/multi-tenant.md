@@ -58,7 +58,9 @@ You need:
     `${MCP_PUBLIC_URL}/auth/google/callback` as an authorized redirect URI.
     Requests `openid email` only — not `profile` — since an address is all
     this server needs to display.
-  - **ZITADEL** (or any OIDC issuer that signs ID tokens with RS256): a Web
+  - **ZITADEL** (or any OIDC issuer that signs ID tokens with RS256 and
+    whose `iss` has no trailing slash, since the configured issuer is
+    normalised without one and must match exactly): a Web
     application with the code flow and client-secret-basic authentication,
     redirect URI `${MCP_PUBLIC_URL}/auth/zitadel/callback`. Set
     `ZITADEL_ISSUER` (e.g. `https://auth.example.com`), `ZITADEL_CLIENT_ID`
@@ -69,7 +71,10 @@ You need:
     `sub` is used. Requests `openid email`; turn on "user info inside ID
     token" for the application so the address can be displayed (the `sub` is
     shown otherwise). Setting only some of the three variables, or a
-    non-https issuer, refuses to start.
+    non-https issuer, refuses to start. The chooser's ZITADEL button points
+    at this server's `/auth/zitadel/start`, which fetches discovery only when
+    clicked (rate-limited per IP), so an unreachable issuer shows an error
+    for ZITADEL alone and never blocks the GitHub or Google buttons.
 
   Configuring more than one is not required: a deployment with only one set
   of credentials behaves exactly as if the others did not exist, and
