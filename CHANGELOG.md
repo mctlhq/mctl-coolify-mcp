@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ZITADEL as a third sign-in provider in multi-tenant mode.** Set `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID` and `ZITADEL_CLIENT_SECRET` (optionally `ZITADEL_DISPLAY_NAME`) and `/authorize` offers it next to GitHub and Google, with its callback at `/auth/zitadel/callback`. It is full OIDC: endpoints from discovery, PKCE (S256), and the ID token's RS256 signature, `iss`, `aud`/`azp`, expiry and `nonce` verified before its `sub` is used. Tenants are keyed by `(zitadel, sub)`, so a ZITADEL login never reaches a GitHub or Google tenant's record, even with the same e-mail. Nothing changes for a deployment that does not set the variables; setting only some of them refuses to start.
 - **`docs/portal-allowlist.json`: which tools the Cloudflare MCP portal (`mcp.mctl.ai`, upstream `coolify`) exposes.** Read-only tools are enabled and every tool that writes is disabled, each with its reason. `npm run check:portal-allowlist` gates it in CI against the tool roster and each tool's `readOnlyHint`, so a tool that gains a write action cannot stay enabled on the portal unnoticed.
 - **`.github/workflows/portal-allowlist-dispatch.yml` publishes that file.** A change to `docs/portal-allowlist.json` on `main` is checked again and sent to mctlhq/mctl-gitops, which vendors it byte-identical and opens a PR; the portal changes only after that PR merges and an approved OpenTofu apply runs (mctlhq/mctl-gitops#1370).
 

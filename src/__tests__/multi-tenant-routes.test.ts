@@ -15,7 +15,8 @@ import { jest } from '@jest/globals';
 import { createHash, randomBytes } from 'node:crypto';
 import { createHttpApp, type HttpServerConfig } from '../lib/http-server.js';
 import { MemoryTenantStore } from '../lib/tenancy.js';
-import type { IdentityConfig } from '../lib/identity.js';
+import { clearOidcCache, type IdentityConfig } from '../lib/identity.js';
+import { FakeOidcIssuer, ZITADEL_ISSUER } from './helpers/fake-oidc.js';
 import type { ProbeResult } from '../lib/enroll.js';
 
 const ISSUER = 'https://mcp.example.com';
@@ -257,6 +258,121 @@ describe('Google as the identity provider', () => {
       name: 'prod',
       baseUrl: 'https://coolify.example.com',
     });
+  });
+});
+
+describe('ZITADEL as the identity provider', () => {
+  it('signs in via /auth/zitadel/callback into its own tenant record, never a same-email Google one', async () => {
+    clearOidcCache();
+    const issuer = new FakeOidcIssuer();
+    global.fetch = jest.fn(issuer.fetch) as unknown as typeof fetch;
+    const store = new MemoryTenantStore();
+    // A Google tenant with the same e-mail already has an instance linked.
+    await store.write(
+      { provider: 'google', sub: '110169484474386276334', login: 'person@example.com' },
+      {
+        login: 'person@example.com',
+        updatedAt: Date.now(),
+        instances: [{ name: 'theirs', baseUrl: 'https://theirs.example.com', accessToken: 't' }],
+      } as never,
+    );
+    const { app } = makeApp({
+      store,
+      identity: {
+        ...bothProvidersIdentity,
+        zitadel: {
+          issuer: ZITADEL_ISSUER,
+          clientId: issuer.clientId,
+          clientSecret: issuer.clientSecret,
+          callbackUrl: `${ISSUER}/auth/zitadel/callback`,
+          displayName: 'MCTL account',
+        },
+      },
+    });
+    const clientId = await registerClient(app);
+    const { challenge } = pkcePair();
+
+    const authorize = await app.fetch(
+      new Request(
+        `${ISSUER}/authorize?${new URLSearchParams({
+          client_id: clientId,
+          redirect_uri: CALLBACK,
+          response_type: 'code',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        })}`,
+      ),
+    );
+    const chooserHtml = await authorize.text();
+    expect(chooserHtml).toContain('Continue with GitHub');
+    expect(chooserHtml).toContain('Continue with Google');
+    const zitadelHref = /href="([^"]*)">Continue with MCTL account/
+      .exec(chooserHtml)![1]
+      .replace(/&amp;/g, '&');
+    expect(new URL(zitadelHref).origin).toBe(ZITADEL_ISSUER);
+    issuer.approve('the-code', zitadelHref, {
+      sub: '290000000000000001',
+      email: 'person@example.com',
+    });
+    const state = new URL(zitadelHref).searchParams.get('state')!;
+
+    const callback = await app.fetch(
+      new Request(
+        `${ISSUER}/auth/zitadel/callback?${new URLSearchParams({ code: 'the-code', state })}`,
+      ),
+    );
+    expect(callback.status).toBe(200);
+    const enrollHtml = await callback.text();
+    // Not enrolled: the Google tenant's instance is not offered to it.
+    expect(enrollHtml).toContain('Link a Coolify instance to finish connecting');
+    expect(enrollHtml).not.toContain('theirs.example.com');
+
+    const enroll = await app.fetch(
+      new Request(`${ISSUER}/enroll`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          continue: extractHidden(enrollHtml, 'continue'),
+          name: 'prod',
+          base_url: 'https://coolify.example.com',
+          token: 'tok',
+        }).toString(),
+      }),
+    );
+    expect(enroll.status).toBe(302);
+    expect(
+      (await store.read({ provider: 'zitadel', sub: '290000000000000001' }))?.instances[0],
+    ).toMatchObject({ name: 'prod' });
+    expect(
+      (await store.read({ provider: 'google', sub: '110169484474386276334' }))?.instances,
+    ).toHaveLength(1);
+  });
+
+  it('refuses a ZITADEL callback whose code fails at the issuer', async () => {
+    clearOidcCache();
+    const issuer = new FakeOidcIssuer();
+    global.fetch = jest.fn(issuer.fetch) as unknown as typeof fetch;
+    const { app } = makeApp({
+      identity: {
+        zitadel: {
+          issuer: ZITADEL_ISSUER,
+          clientId: issuer.clientId,
+          clientSecret: issuer.clientSecret,
+          callbackUrl: `${ISSUER}/auth/zitadel/callback`,
+          displayName: 'ZITADEL',
+        },
+      },
+    });
+    const enroll = await app.fetch(new Request(`${ISSUER}/enroll`));
+    expect(enroll.status).toBe(302);
+    const state = new URL(enroll.headers.get('location')!).searchParams.get('state')!;
+    const callback = await app.fetch(
+      new Request(
+        `${ISSUER}/auth/zitadel/callback?${new URLSearchParams({ code: 'unknown', state })}`,
+      ),
+    );
+    expect(callback.status).toBe(400);
+    expect(await callback.text()).toContain('rejected the login');
   });
 });
 

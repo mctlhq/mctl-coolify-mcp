@@ -41,10 +41,29 @@
  * configure one or both; `/authorize` shows a chooser only when more than one
  * is actually configured, so a single-provider deployment (this server's own
  * GitHub-only instance, today) sees no UI change at all.
+ *
+ * ## ZITADEL, the third provider
+ *
+ * ZITADEL (any standard OIDC issuer, really) is the one provider whose host is
+ * configuration rather than a constant, so it is the one place this module
+ * does full OIDC: endpoints come from the issuer's discovery document, the
+ * code flow carries PKCE, and the ID token's signature, `iss`, `aud`/`azp`,
+ * expiry and `nonce` are all checked before its `sub` is believed. Its
+ * subjects are keyed `zitadel:<sub>` like every other provider's, so a
+ * ZITADEL login never lands in a GitHub or Google user's tenant record, even
+ * when the e-mail addresses match — an address is not proof of being the
+ * same person.
  */
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  createPublicKey,
+  randomBytes,
+  timingSafeEqual,
+  verify as verifySignature,
+} from 'node:crypto';
 
-export type Provider = 'github' | 'google';
+export type Provider = 'github' | 'google' | 'zitadel';
 
 /** GitHub's OAuth endpoints. Fixed hosts, so no SSRF guard is warranted here. */
 const GITHUB_AUTHORIZE = 'https://github.com/login/oauth/authorize';
@@ -80,10 +99,19 @@ export interface ProviderCredentials {
   callbackUrl: string;
 }
 
-/** Per-provider credentials. A deployment configures one or both. */
+/** A generic OIDC provider: the issuer is configuration, its endpoints are discovered. */
+export interface OidcProviderCredentials extends ProviderCredentials {
+  /** Exact issuer, e.g. `https://auth.mctl.ai`; must equal the ID token's `iss`. */
+  issuer: string;
+  /** Button text on the sign-in chooser: "Continue with <displayName>". */
+  displayName: string;
+}
+
+/** Per-provider credentials. A deployment configures any non-empty subset. */
 export interface IdentityConfig {
   github?: ProviderCredentials;
   google?: ProviderCredentials;
+  zitadel?: OidcProviderCredentials;
 }
 
 /** The verified human. `sub` is what tenant records are keyed by. */
@@ -91,13 +119,19 @@ export interface VerifiedIdentity {
   provider: Provider;
   /** The provider's immutable id, as a string. Never the login/email. */
   sub: string;
-  /** Current login (GitHub) or email (Google), display/audit only — never a key. */
+  /** Current login (GitHub) or email (Google, ZITADEL), display/audit only — never a key. */
   login: string;
 }
 
 /** Which providers a deployment has actually configured, in a stable order. */
 export function configuredProviders(config: IdentityConfig): Provider[] {
-  return (['github', 'google'] as const).filter((provider) => config[provider] !== undefined);
+  return (['github', 'google', 'zitadel'] as const).filter(
+    (provider) => config[provider] !== undefined,
+  );
+}
+
+export function isProvider(value: unknown): value is Provider {
+  return value === 'github' || value === 'google' || value === 'zitadel';
 }
 
 export class IdentityError extends Error {
@@ -110,10 +144,16 @@ export class IdentityError extends Error {
 /**
  * Read the configured identity providers' credentials from the environment.
  *
- * Returns `undefined` when NEITHER provider is configured, so single-tenant
+ * Returns `undefined` when NO provider is configured, so single-tenant
  * mode — which needs no identity provider at all — boots unchanged. Multi
  * mode's startup check is what turns absence into a refusal to start; one
- * provider configured is enough, the other is simply not offered.
+ * provider configured is enough, the others are simply not offered.
+ *
+ * ZITADEL needs `ZITADEL_ISSUER` on top of the client id and secret. A
+ * ZITADEL configuration that is started but not finished, or whose issuer is
+ * not an https URL, is a startup error rather than a silently missing button:
+ * unlike GitHub and Google it is optional by design, so an operator who set
+ * some of it meant to turn it on.
  */
 export function identityFromEnv(
   env: NodeJS.ProcessEnv,
@@ -121,13 +161,14 @@ export function identityFromEnv(
 ): IdentityConfig | undefined {
   const github = providerCredentialsFromEnv(env, 'GITHUB', 'github', publicUrl);
   const google = providerCredentialsFromEnv(env, 'GOOGLE', 'google', publicUrl);
-  if (!github && !google) return undefined;
-  return { github, google };
+  const zitadel = zitadelCredentialsFromEnv(env, publicUrl);
+  if (!github && !google && !zitadel) return undefined;
+  return { github, google, zitadel };
 }
 
 function providerCredentialsFromEnv(
   env: NodeJS.ProcessEnv,
-  envPrefix: 'GITHUB' | 'GOOGLE',
+  envPrefix: 'GITHUB' | 'GOOGLE' | 'ZITADEL',
   provider: Provider,
   publicUrl: string,
 ): ProviderCredentials | undefined {
@@ -135,6 +176,38 @@ function providerCredentialsFromEnv(
   const clientSecret = env[`${envPrefix}_CLIENT_SECRET`]?.trim();
   if (!clientId || !clientSecret) return undefined;
   return { clientId, clientSecret, callbackUrl: `${publicUrl}/auth/${provider}/callback` };
+}
+
+function zitadelCredentialsFromEnv(
+  env: NodeJS.ProcessEnv,
+  publicUrl: string,
+): OidcProviderCredentials | undefined {
+  const issuer = env.ZITADEL_ISSUER?.trim().replace(/\/+$/, '');
+  const creds = providerCredentialsFromEnv(env, 'ZITADEL', 'zitadel', publicUrl);
+  const anySet = [env.ZITADEL_ISSUER, env.ZITADEL_CLIENT_ID, env.ZITADEL_CLIENT_SECRET].some(
+    (value) => value !== undefined && value.trim() !== '',
+  );
+  if (!anySet) return undefined;
+  if (!issuer || !creds) {
+    throw new Error(
+      'ZITADEL login is partly configured: set all of ZITADEL_ISSUER, ZITADEL_CLIENT_ID and ' +
+        'ZITADEL_CLIENT_SECRET, or none of them.',
+    );
+  }
+  if (!isHttpsUrl(issuer)) {
+    throw new Error(`ZITADEL_ISSUER must be an https URL, got ${JSON.stringify(issuer)}.`);
+  }
+  const displayName = env.ZITADEL_DISPLAY_NAME?.trim() || 'ZITADEL';
+  return { ...creds, issuer, displayName };
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.username === '' && url.password === '';
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +349,7 @@ export function openEnrolmentTicket(value: string): {
 } {
   const claims = openTicket(value);
   if (
-    (claims.provider !== 'github' && claims.provider !== 'google') ||
+    !isProvider(claims.provider) ||
     typeof claims.sub !== 'string' ||
     typeof claims.login !== 'string' ||
     typeof claims.q !== 'string'
@@ -302,15 +375,20 @@ export function openEnrolmentTicket(value: string): {
  * repositories), `openid email` for Google (`openid` is mandatory to get a
  * `sub` at all; `email` is the closest Google analog to GitHub's login, for
  * display — `profile` is deliberately not requested, since name/picture are
- * not needed for anything here).
+ * not needed for anything here), and the same `openid email` for ZITADEL.
+ *
+ * Async because the ZITADEL link needs the issuer's discovery document; the
+ * other two are built from constants.
  */
-export function loginRedirectUrl(
+export async function loginRedirectUrl(
   config: IdentityConfig,
   provider: Provider,
   state: string,
-): string {
+): Promise<string> {
   const creds = config[provider];
   if (!creds) throw new IdentityError(`${provider} login is not configured on this server.`);
+
+  if (provider === 'zitadel') return zitadelLoginUrl(config.zitadel!, state);
 
   if (provider === 'github') {
     const params = new URLSearchParams({
@@ -358,11 +436,17 @@ export async function exchangeCodeForIdentity(
   config: IdentityConfig,
   provider: Provider,
   code: string,
+  /**
+   * The state value the callback carried. Only ZITADEL needs it: its PKCE
+   * verifier and ID-token nonce are derived from it (see `oidcBinding`).
+   */
+  state = '',
 ): Promise<VerifiedIdentity> {
   const creds = config[provider];
   if (!creds) throw new IdentityError(`${provider} login is not configured on this server.`);
   if (!code) throw new IdentityError('The identity provider returned no authorization code.');
 
+  if (provider === 'zitadel') return exchangeZitadel(config.zitadel!, code, state);
   return provider === 'github' ? exchangeGithub(creds, code) : exchangeGoogle(creds, code);
 }
 
@@ -477,4 +561,266 @@ async function exchangeGoogle(creds: ProviderCredentials, code: string): Promise
   }
 
   return { provider: 'google', sub: profile.sub, login: profile.email };
+}
+
+// ---------------------------------------------------------------------------
+// ZITADEL (generic OIDC)
+// ---------------------------------------------------------------------------
+
+/** How long a discovery document or key set is reused before it is fetched again. */
+const OIDC_CACHE_TTL_MS = 60 * 60 * 1000;
+
+/** Tolerated clock difference between this server and the issuer. */
+const CLOCK_SKEW_SECONDS = 60;
+
+/** One entry of a JWKS `keys` array, as published; read field by field. */
+type Jwk = Record<string, unknown>;
+
+interface OidcDiscovery {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  jwksUri: string;
+}
+
+const discoveryCache = new Map<string, { value: OidcDiscovery; fetchedAt: number }>();
+const jwksCache = new Map<string, { keys: Jwk[]; fetchedAt: number }>();
+
+/** Forget every discovered document and key set. For tests. */
+export function clearOidcCache(): void {
+  discoveryCache.clear();
+  jwksCache.clear();
+}
+
+async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
+  const response = await fetch(url, {
+    ...init,
+    redirect: 'error',
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  }).catch(() => {
+    throw new IdentityError('Could not reach the identity provider. Try again.');
+  });
+  if (!response.ok) {
+    throw new IdentityError(
+      init?.method === 'POST'
+        ? 'The identity provider rejected the login.'
+        : 'The identity provider is not answering correctly. Try again later.',
+    );
+  }
+  try {
+    return JSON.parse(await readCapped(response));
+  } catch (error) {
+    if (error instanceof IdentityError) throw error;
+    throw new IdentityError('The identity provider returned an unreadable response.');
+  }
+}
+
+/**
+ * The issuer's endpoints, from its discovery document.
+ *
+ * The document is believed only if it names the configured issuer exactly
+ * (OIDC Discovery §4.3) and every endpoint is https on the issuer's own
+ * origin, so a discovery answer cannot send the code, the client secret or
+ * the key lookup anywhere else. A failed fetch is never cached.
+ */
+async function discover(creds: OidcProviderCredentials): Promise<OidcDiscovery> {
+  const cached = discoveryCache.get(creds.issuer);
+  if (cached && Date.now() - cached.fetchedAt < OIDC_CACHE_TTL_MS) return cached.value;
+
+  const doc = (await fetchJson(`${creds.issuer}/.well-known/openid-configuration`, {
+    headers: { accept: 'application/json' },
+  })) as Record<string, unknown> | null;
+  const issuerOrigin = new URL(creds.issuer).origin;
+  const endpoint = (name: string): string => {
+    const value = doc?.[name];
+    if (typeof value !== 'string' || !isHttpsUrl(value) || new URL(value).origin !== issuerOrigin) {
+      throw new IdentityError('The identity provider published an unusable configuration.');
+    }
+    return value;
+  };
+  if (doc?.issuer !== creds.issuer) {
+    throw new IdentityError('The identity provider published an unusable configuration.');
+  }
+  const value: OidcDiscovery = {
+    authorizationEndpoint: endpoint('authorization_endpoint'),
+    tokenEndpoint: endpoint('token_endpoint'),
+    jwksUri: endpoint('jwks_uri'),
+  };
+  discoveryCache.set(creds.issuer, { value, fetchedAt: Date.now() });
+  return value;
+}
+
+async function signingKeys(jwksUri: string, refresh: boolean): Promise<Jwk[]> {
+  const cached = jwksCache.get(jwksUri);
+  if (!refresh && cached && Date.now() - cached.fetchedAt < OIDC_CACHE_TTL_MS) return cached.keys;
+
+  const body = (await fetchJson(jwksUri, { headers: { accept: 'application/json' } })) as {
+    keys?: unknown;
+  } | null;
+  if (!Array.isArray(body?.keys)) {
+    throw new IdentityError('The identity provider published an unusable key set.');
+  }
+  const keys = body.keys.filter((key): key is Jwk => typeof key === 'object' && key !== null);
+  jwksCache.set(jwksUri, { keys, fetchedAt: Date.now() });
+  return keys;
+}
+
+/**
+ * The PKCE verifier and the ID-token nonce for one login, derived from its
+ * state value with the state key.
+ *
+ * This keeps the flow as stateless as the GitHub and Google legs: nothing is
+ * stored between the redirect and the callback, yet neither value can be
+ * computed by someone who saw the state in a URL, because the key never
+ * leaves the server. The state is itself signed and short-lived, so the
+ * binding expires with it.
+ */
+function oidcBinding(state: string): { verifier: string; challenge: string; nonce: string } {
+  const verifier = b64url(createHmac('sha256', stateKey()).update(`pkce\0${state}`).digest());
+  return {
+    verifier,
+    challenge: b64url(createHash('sha256').update(verifier).digest()),
+    nonce: b64url(createHmac('sha256', stateKey()).update(`nonce\0${state}`).digest()),
+  };
+}
+
+async function zitadelLoginUrl(creds: OidcProviderCredentials, state: string): Promise<string> {
+  const { authorizationEndpoint } = await discover(creds);
+  const { challenge, nonce } = oidcBinding(state);
+  const params = new URLSearchParams({
+    client_id: creds.clientId,
+    redirect_uri: creds.callbackUrl,
+    state,
+    scope: 'openid email',
+    response_type: 'code',
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    nonce,
+    // Same reasoning as Google's: the person should see which account.
+    prompt: 'select_account',
+  });
+  return `${authorizationEndpoint}?${params.toString()}`;
+}
+
+async function exchangeZitadel(
+  creds: OidcProviderCredentials,
+  code: string,
+  state: string,
+): Promise<VerifiedIdentity> {
+  if (!state) throw new IdentityError('The login state is missing or malformed.');
+  const { tokenEndpoint, jwksUri } = await discover(creds);
+  const { verifier, nonce } = oidcBinding(state);
+
+  // client_secret_basic: the client is created with
+  // OIDC_AUTH_METHOD_TYPE_BASIC. RFC 6749 §2.3.1 form-encodes both halves
+  // before joining them.
+  const basic = Buffer.from(
+    `${encodeURIComponent(creds.clientId)}:${encodeURIComponent(creds.clientSecret)}`,
+    'utf8',
+  ).toString('base64');
+  const token = (await fetchJson(tokenEndpoint, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      authorization: `Basic ${basic}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: creds.callbackUrl,
+      code_verifier: verifier,
+    }).toString(),
+  })) as { id_token?: unknown } | null;
+  if (typeof token?.id_token !== 'string' || token.id_token === '') {
+    throw new IdentityError('The identity provider did not issue a token.');
+  }
+
+  const claims = await verifyIdToken(token.id_token, creds, jwksUri, nonce);
+  const login =
+    typeof claims.email === 'string' && claims.email !== ''
+      ? claims.email
+      : typeof claims.preferred_username === 'string' && claims.preferred_username !== ''
+        ? claims.preferred_username
+        : (claims.sub as string);
+  return { provider: 'zitadel', sub: claims.sub as string, login };
+}
+
+/**
+ * Verify an ID token and return its claims. Throws on anything short of a
+ * token this issuer signed, for this client, for this login, still valid.
+ *
+ * RS256 only — what ZITADEL signs with. Accepting the header's `alg` as given
+ * is the classic JWT downgrade (`none`, or HS256 keyed with the public key),
+ * so the algorithm is fixed here and the header may only agree with it.
+ */
+export async function verifyIdToken(
+  idToken: string,
+  creds: OidcProviderCredentials,
+  jwksUri: string,
+  expectedNonce: string,
+): Promise<Record<string, unknown>> {
+  const unusable = (): IdentityError =>
+    new IdentityError('The identity provider returned an unusable ID token.');
+
+  const parts = idToken.split('.');
+  if (parts.length !== 3) throw unusable();
+  const [encodedHeader, encodedPayload, encodedSignature] = parts;
+
+  let header: { alg?: unknown; kid?: unknown };
+  let claims: Record<string, unknown>;
+  try {
+    header = JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf8'));
+    claims = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+  } catch {
+    throw unusable();
+  }
+  if (typeof header !== 'object' || header === null) throw unusable();
+  if (typeof claims !== 'object' || claims === null) throw unusable();
+  if (header.alg !== 'RS256') throw unusable();
+
+  const pick = (keys: Jwk[]): Jwk[] =>
+    keys.filter(
+      (key) =>
+        key.kty === 'RSA' &&
+        (key.use === undefined || key.use === 'sig') &&
+        (key.alg === undefined || key.alg === 'RS256') &&
+        (header.kid === undefined || key.kid === header.kid),
+    );
+  let candidates = pick(await signingKeys(jwksUri, false));
+  // An unknown kid most likely means the issuer rotated its keys since we
+  // cached them: look once more before giving up.
+  if (candidates.length === 0) candidates = pick(await signingKeys(jwksUri, true));
+
+  const signed = Buffer.from(`${encodedHeader}.${encodedPayload}`, 'utf8');
+  const signature = Buffer.from(encodedSignature, 'base64url');
+  const valid = candidates.some((jwk) => {
+    try {
+      return verifySignature(
+        'RSA-SHA256',
+        signed,
+        createPublicKey({ key: jwk as never, format: 'jwk' }),
+        signature,
+      );
+    } catch {
+      return false;
+    }
+  });
+  if (!valid) throw new IdentityError('The ID token signature did not verify.');
+
+  const now = Math.floor(Date.now() / 1000);
+  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (claims.iss !== creds.issuer) throw unusable();
+  if (!audiences.includes(creds.clientId)) throw unusable();
+  // Several audiences (ZITADEL adds the project id) means the authorized
+  // party must say which one the token was issued to (OIDC Core §3.1.3.7).
+  if ((audiences.length > 1 || claims.azp !== undefined) && claims.azp !== creds.clientId) {
+    throw unusable();
+  }
+  if (typeof claims.exp !== 'number' || claims.exp + CLOCK_SKEW_SECONDS < now) {
+    throw new IdentityError('The login took too long. Start again.');
+  }
+  if (typeof claims.iat !== 'number' || claims.iat - CLOCK_SKEW_SECONDS > now) throw unusable();
+  if (claims.nonce !== expectedNonce) throw unusable();
+  if (typeof claims.sub !== 'string' || claims.sub === '') throw unusable();
+  return claims;
 }

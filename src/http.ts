@@ -189,14 +189,24 @@ async function main(): Promise<void> {
   let tenancy: TenancyConfig | undefined;
   let stateVault: VaultClient | undefined;
   if (multiTenant) {
-    const identity = identityFromEnv(process.env, publicUrl);
+    let identity: ReturnType<typeof identityFromEnv>;
+    let identityProblem: string | undefined;
+    try {
+      identity = identityFromEnv(process.env, publicUrl);
+    } catch (error) {
+      identityProblem = (error as Error).message;
+    }
     const vaultConfig = vaultFromEnv(process.env);
-    if (!identity) {
+    if (identityProblem) {
+      problems.push(identityProblem);
+    } else if (!identity) {
       problems.push(
         'MCP_TENANCY=multi needs at least one identity provider: GITHUB_CLIENT_ID + ' +
           'GITHUB_CLIENT_SECRET (callback: ' +
-          `${publicUrl || 'https://your-domain'}/auth/github/callback), and/or GOOGLE_CLIENT_ID ` +
-          `+ GOOGLE_CLIENT_SECRET (callback: ${publicUrl || 'https://your-domain'}/auth/google/callback)`,
+          `${publicUrl || 'https://your-domain'}/auth/github/callback), GOOGLE_CLIENT_ID ` +
+          `+ GOOGLE_CLIENT_SECRET (callback: ${publicUrl || 'https://your-domain'}/auth/google/callback), ` +
+          'and/or ZITADEL_ISSUER + ZITADEL_CLIENT_ID + ZITADEL_CLIENT_SECRET (callback: ' +
+          `${publicUrl || 'https://your-domain'}/auth/zitadel/callback)`,
       );
     }
     if (!vaultConfig) {

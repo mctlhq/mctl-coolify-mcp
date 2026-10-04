@@ -361,7 +361,10 @@ function authorizePage(params: URLSearchParams, clientName: string, error?: stri
 </html>`;
 }
 
-const PROVIDER_LABEL: Record<Provider, string> = { github: 'GitHub', google: 'Google' };
+function providerLabel(identity: IdentityConfig, provider: Provider): string {
+  if (provider === 'zitadel') return identity.zitadel?.displayName ?? 'ZITADEL';
+  return provider === 'github' ? 'GitHub' : 'Google';
+}
 
 /**
  * Shown only when a deployment configures more than one identity provider.
@@ -369,11 +372,18 @@ const PROVIDER_LABEL: Record<Provider, string> = { github: 'GitHub', google: 'Go
  * redirect, not user input — so there is nothing here for an open-redirect
  * check to guard against.
  */
-function loginChooserPage(identity: IdentityConfig, providers: Provider[], state: string): string {
+async function loginChooserPage(
+  identity: IdentityConfig,
+  providers: Provider[],
+  state: string,
+): Promise<string> {
+  const hrefs = await Promise.all(
+    providers.map((provider) => loginRedirectUrl(identity, provider, state)),
+  );
   const links = providers
     .map(
-      (provider) =>
-        `<a class="provider" href="${escapeHtml(loginRedirectUrl(identity, provider, state))}">Continue with ${PROVIDER_LABEL[provider]}</a>`,
+      (provider, index) =>
+        `<a class="provider" href="${escapeHtml(hrefs[index])}">Continue with ${escapeHtml(providerLabel(identity, provider))}</a>`,
     )
     .join('\n      ');
   return `<!doctype html>
@@ -587,9 +597,9 @@ export function createHttpApp(config: HttpServerConfig): {
           const state = sealLoginState(url.searchParams.toString());
           const providers = configuredProviders(config.tenancy.identity);
           if (providers.length === 1) {
-            return redirect(loginRedirectUrl(config.tenancy.identity, providers[0], state));
+            return redirect(await loginRedirectUrl(config.tenancy.identity, providers[0], state));
           }
-          return html(loginChooserPage(config.tenancy.identity, providers, state));
+          return html(await loginChooserPage(config.tenancy.identity, providers, state));
         }
         return html(
           authorizePage(url.searchParams, validated.client.client_name ?? 'An MCP client'),
@@ -674,7 +684,9 @@ export function createHttpApp(config: HttpServerConfig): {
         ? 'github'
         : path === '/auth/google/callback'
           ? 'google'
-          : undefined;
+          : path === '/auth/zitadel/callback'
+            ? 'zitadel'
+            : undefined;
     if (config.tenancy && callbackProvider && request.method === 'GET') {
       if (!authLimiter.allow(`cb:${clientIp}`)) {
         return html('<p>Too many attempts. Try again in a minute.</p>', 429);
@@ -695,6 +707,7 @@ export function createHttpApp(config: HttpServerConfig): {
           config.tenancy.identity,
           callbackProvider,
           url.searchParams.get('code') ?? '',
+          url.searchParams.get('state') ?? '',
         );
       } catch (error) {
         return html(
@@ -742,9 +755,9 @@ export function createHttpApp(config: HttpServerConfig): {
       const state = sealLoginState('');
       const providers = configuredProviders(config.tenancy.identity);
       if (providers.length === 1) {
-        return redirect(loginRedirectUrl(config.tenancy.identity, providers[0], state));
+        return redirect(await loginRedirectUrl(config.tenancy.identity, providers[0], state));
       }
-      return html(loginChooserPage(config.tenancy.identity, providers, state));
+      return html(await loginChooserPage(config.tenancy.identity, providers, state));
     }
 
     if (config.tenancy && path === '/enroll' && request.method === 'POST') {

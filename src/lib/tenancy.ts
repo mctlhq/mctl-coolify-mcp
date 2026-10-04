@@ -30,7 +30,7 @@ import { InstanceRegistry, type InstanceDefinition } from './instances.js';
 import { pinnedDispatcherFor, UnsafeUrlError } from './tenant-dispatcher.js';
 import type { Resolver } from './ssrf.js';
 import { VaultClient, VaultError } from './vault.js';
-import type { VerifiedIdentity } from './identity.js';
+import { isProvider, type VerifiedIdentity } from './identity.js';
 
 /** A tenant's enrolled Coolify instances, as stored. */
 export interface EnrolledInstance {
@@ -206,6 +206,6 @@ export function subjectFromAuthInfo(
 ): Pick<VerifiedIdentity, 'provider' | 'sub'> | undefined {
   const bag = extra as { provider?: unknown; sub?: unknown } | undefined;
   if (!bag || typeof bag.sub !== 'string') return undefined;
-  if (bag.provider !== 'github' && bag.provider !== 'google') return undefined;
+  if (!isProvider(bag.provider)) return undefined;
   return { provider: bag.provider, sub: bag.sub };
 }

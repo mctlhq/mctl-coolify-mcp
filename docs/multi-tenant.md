@@ -34,7 +34,7 @@ person.
 | Whose Coolify a tool call reaches  | The one in `COOLIFY_BASE_URL` / `COOLIFY_INSTANCES`       | Whichever the signed-in caller enrolled                                                      |
 | Where the Coolify credential lives | Container environment                                     | Vault, keyed by the caller, entered once through `/enroll`                                   |
 | `/authorize`                       | Asks for a Coolify token                                  | Redirects to the identity provider (or shows a chooser if both are configured)               |
-| New routes                         | —                                                         | `/enroll`, `/auth/github/callback`, `/auth/google/callback`, `/enroll/revoke`                |
+| New routes                         | —                                                         | `/enroll`, `/auth/{github,google,zitadel}/callback`, `/enroll/revoke`                        |
 | OAuth state persistence            | A file on a mounted volume (`MCP_OAUTH_STATE_FILE`)       | The same file, but under `/tmp`, mirrored to Vault so it survives a restart without a volume |
 
 Everything else — the 45 tools, PKCE, CIMD/DCR client registration, the
@@ -58,12 +58,24 @@ You need:
     `${MCP_PUBLIC_URL}/auth/google/callback` as an authorized redirect URI.
     Requests `openid email` only — not `profile` — since an address is all
     this server needs to display.
+  - **ZITADEL** (or any OIDC issuer that signs ID tokens with RS256): a Web
+    application with the code flow and client-secret-basic authentication,
+    redirect URI `${MCP_PUBLIC_URL}/auth/zitadel/callback`. Set
+    `ZITADEL_ISSUER` (e.g. `https://auth.example.com`), `ZITADEL_CLIENT_ID`
+    and `ZITADEL_CLIENT_SECRET`; `ZITADEL_DISPLAY_NAME` sets the chooser's
+    button text (default `ZITADEL`). Endpoints come from the issuer's
+    discovery document, the flow uses PKCE (S256), and the ID token's
+    signature, `iss`, `aud`/`azp`, expiry and `nonce` are verified before its
+    `sub` is used. Requests `openid email`; turn on "user info inside ID
+    token" for the application so the address can be displayed (the `sub` is
+    shown otherwise). Setting only some of the three variables, or a
+    non-https issuer, refuses to start.
 
-  Configuring both is not required: a deployment with only one set of
-  credentials behaves exactly as if the other provider did not exist, and
-  `/authorize` redirects straight to it with no chooser shown. Configure both
-  and `/authorize` shows a two-button "Continue with GitHub" / "Continue with
-  Google" page instead. Either way, the server prints exactly which
+  Configuring more than one is not required: a deployment with only one set
+  of credentials behaves exactly as if the others did not exist, and
+  `/authorize` redirects straight to it with no chooser shown. Configure
+  several and `/authorize` shows one "Continue with ..." button per provider
+  instead. Either way, the server prints exactly which
   credentials it is missing if you start it without any configured.
 
 - A **Vault KV v2 mount** the container can reach, with `max_versions=1` (see
@@ -83,6 +95,12 @@ GITHUB_CLIENT_SECRET=...
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 
+# Optional third provider (generic OIDC). Set all three or none.
+ZITADEL_ISSUER=https://auth.example.com
+ZITADEL_CLIENT_ID=...
+ZITADEL_CLIENT_SECRET=...
+# ZITADEL_DISPLAY_NAME=Example account
+
 VAULT_ADDR=https://vault.example.com
 VAULT_KV_MOUNT=coolify-mcp-users
 VAULT_ROLE=coolify-mcp            # Kubernetes auth; use VAULT_TOKEN outside a cluster
@@ -96,16 +114,17 @@ MCP_EGRESS_ADDRESSES=203.0.113.10,203.0.113.11
 
 Notice `COOLIFY_BASE_URL` and `COOLIFY_ACCESS_TOKEN` are **absent**: the
 operator of a multi-tenant server need not own a Coolify at all. The server
-refuses to start unless at least one of `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`
-or `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` is set, along with
+refuses to start unless at least one of `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`,
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` or the three `ZITADEL_*` variables is
+set, along with
 `VAULT_ADDR`/`VAULT_KV_MOUNT`, naming exactly what is missing, rather than
 booting and failing the first person who tries to connect.
 
 Whichever provider a tenant used, tenants are keyed by `(provider, provider's
-own immutable id)` — GitHub's numeric user id, Google's OIDC `sub` — never by
-login or email, and never across providers: the same person signing in with
-GitHub once and Google another time gets two separate tenant records, by
-design. There is no account-linking step.
+own immutable id)` — GitHub's numeric user id, Google's or ZITADEL's OIDC
+`sub` — never by login or email, and never across providers: the same person
+signing in with GitHub once and ZITADEL another time gets two separate tenant
+records, by design, even when the e-mail addresses match. There is no account-linking step.
 
 ## What a tenant does
 

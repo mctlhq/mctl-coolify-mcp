@@ -128,8 +128,8 @@ describe('login state', () => {
 });
 
 describe('login redirect', () => {
-  it('asks GitHub for no scopes, because we want a name and not access', () => {
-    const url = new URL(loginRedirectUrl(config, 'github', 'state-value'));
+  it('asks GitHub for no scopes, because we want a name and not access', async () => {
+    const url = new URL(await loginRedirectUrl(config, 'github', 'state-value'));
     expect(url.origin + url.pathname).toBe('https://github.com/login/oauth/authorize');
     expect(url.searchParams.get('scope')).toBe('');
     expect(url.searchParams.get('client_id')).toBe(githubCreds.clientId);
@@ -137,8 +137,8 @@ describe('login redirect', () => {
     expect(url.searchParams.get('state')).toBe('state-value');
   });
 
-  it('asks Google for openid + email only, not profile', () => {
-    const url = new URL(loginRedirectUrl(bothConfig, 'google', 'state-value'));
+  it('asks Google for openid + email only, not profile', async () => {
+    const url = new URL(await loginRedirectUrl(bothConfig, 'google', 'state-value'));
     expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
     expect(url.searchParams.get('scope')).toBe('openid email');
     expect(url.searchParams.get('client_id')).toBe(googleCreds.clientId);
@@ -146,8 +146,8 @@ describe('login redirect', () => {
     expect(url.searchParams.get('state')).toBe('state-value');
   });
 
-  it('refuses to build a link for a provider that is not configured', () => {
-    expect(() => loginRedirectUrl(config, 'google', 'state-value')).toThrow(
+  it('refuses to build a link for a provider that is not configured', async () => {
+    await expect(loginRedirectUrl(config, 'google', 'state-value')).rejects.toThrow(
       /google login is not configured/,
     );
   });
