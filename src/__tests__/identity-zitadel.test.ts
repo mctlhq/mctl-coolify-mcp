@@ -226,6 +226,19 @@ describe('ZITADEL code exchange', () => {
     expect(request.body.get('client_secret')).toBeNull();
   });
 
+  it('form-encodes both halves of the Basic credentials (RFC 6749 §2.3.1)', async () => {
+    // The fake issuer decodes them as ZITADEL does, so the login above only
+    // succeeds with the encoding; this pins what went over the wire too.
+    await login({ sub: '1', email: 'a@example.com' });
+    const [request] = issuer.tokenRequests;
+    const decoded = Buffer.from(request.authorization.replace(/^Basic /, ''), 'base64').toString();
+    expect(issuer.clientId).toContain('@');
+    expect(decoded).toBe(
+      `${encodeURIComponent(issuer.clientId)}:${encodeURIComponent(issuer.clientSecret)}`,
+    );
+    expect(decoded).toContain('%40');
+  });
+
   it('falls back to preferred_username, then sub, when there is no email', async () => {
     await expect(login({ sub: '7', claims: { preferred_username: 'zuser' } })).resolves.toEqual({
       provider: 'zitadel',
@@ -366,6 +379,57 @@ describe('ZITADEL code exchange', () => {
         sub: '1',
       });
       expect(issuer.hits.jwks).toBe(2);
+    });
+
+    it('re-fetches the key set once after a rotation when the token carries no kid', async () => {
+      await login({ sub: '1', email: 'a@example.com', header: { kid: undefined } });
+      expect(issuer.hits.jwks).toBe(1);
+      issuer.rotateKey('kid-2');
+      // Every cached key is a candidate without a kid, so only a failed
+      // signature, not an empty candidate list, can reveal the rotation.
+      await expect(
+        login({ sub: '1', email: 'a@example.com', header: { kid: undefined } }),
+      ).resolves.toMatchObject({ sub: '1' });
+      expect(issuer.hits.jwks).toBe(2);
+    });
+
+    it('does not fetch the key set twice when a just-fetched set fails the token', async () => {
+      const other = new FakeOidcIssuer();
+      const fetchMock = jest.fn(async (input: unknown, init?: RequestInit) => {
+        const response = await issuer.fetch(input, init);
+        if (!String(input).endsWith('/oauth/v2/token') || !response.ok) return response;
+        const body = (await response.json()) as { id_token: string };
+        const claims = JSON.parse(Buffer.from(body.id_token.split('.')[1], 'base64url').toString());
+        return Response.json({ id_token: other.sign({ alg: 'RS256', kid: 'kid-1' }, claims) });
+      });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      await expect(login({ sub: '1' })).rejects.toThrow(/signature did not verify/);
+      expect(issuer.hits.jwks).toBe(1);
+    });
+
+    it('shares one key-set fetch between concurrent logins after a rotation', async () => {
+      await login({ sub: '1', email: 'a@example.com' });
+      issuer.rotateKey('kid-2');
+      const logins = ['c1', 'c2', 'c3'].map(async (code) => {
+        const state = sealLoginState(`client_id=${code}`);
+        issuer.approve(code, await loginRedirectUrl(config, 'zitadel', state), {
+          sub: '1',
+          email: 'a@example.com',
+        });
+        return state;
+      });
+      const states = await Promise.all(logins);
+      await Promise.all(
+        ['c1', 'c2', 'c3'].map((code, i) =>
+          exchangeCodeForIdentity(config, 'zitadel', code, states[i]),
+        ),
+      );
+      expect(issuer.hits.jwks).toBe(2);
+    });
+
+    it('refuses a key set without a keys array', async () => {
+      issuer.jwksBody = { keys: 'not-an-array' };
+      await expect(login({ sub: '1' })).rejects.toThrow(/unusable key set/);
     });
 
     it('refuses a malformed token', async () => {

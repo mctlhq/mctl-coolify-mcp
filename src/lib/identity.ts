@@ -586,12 +586,15 @@ const discoveryCache = new Map<string, { value: OidcDiscovery; fetchedAt: number
 /** Discovery fetches in flight, so concurrent logins share one request. */
 const discoveryInFlight = new Map<string, Promise<OidcDiscovery>>();
 const jwksCache = new Map<string, { keys: Jwk[]; fetchedAt: number }>();
+/** Key-set fetches in flight, so a rotation seen by concurrent logins is one request. */
+const jwksInFlight = new Map<string, Promise<Jwk[]>>();
 
 /** Forget every discovered document and key set. For tests. */
 export function clearOidcCache(): void {
   discoveryCache.clear();
   discoveryInFlight.clear();
   jwksCache.clear();
+  jwksInFlight.clear();
 }
 
 async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
@@ -664,10 +667,28 @@ async function fetchDiscovery(creds: OidcProviderCredentials): Promise<OidcDisco
   return value;
 }
 
-async function signingKeys(jwksUri: string, refresh: boolean): Promise<Jwk[]> {
+/**
+ * The issuer's signing keys, and whether they were fetched just now (rather
+ * than served from the cache). `refresh` skips the cache; concurrent fetches
+ * of one key set share the request in flight, and a failed one is not cached.
+ */
+async function signingKeys(
+  jwksUri: string,
+  refresh: boolean,
+): Promise<{ keys: Jwk[]; fresh: boolean }> {
   const cached = jwksCache.get(jwksUri);
-  if (!refresh && cached && Date.now() - cached.fetchedAt < OIDC_CACHE_TTL_MS) return cached.keys;
+  if (!refresh && cached && Date.now() - cached.fetchedAt < OIDC_CACHE_TTL_MS) {
+    return { keys: cached.keys, fresh: false };
+  }
+  let pending = jwksInFlight.get(jwksUri);
+  if (!pending) {
+    pending = fetchSigningKeys(jwksUri).finally(() => jwksInFlight.delete(jwksUri));
+    jwksInFlight.set(jwksUri, pending);
+  }
+  return { keys: await pending, fresh: true };
+}
 
+async function fetchSigningKeys(jwksUri: string): Promise<Jwk[]> {
   const body = (await fetchJson(jwksUri, { headers: { accept: 'application/json' } })) as {
     keys?: unknown;
   } | null;
@@ -688,6 +709,17 @@ async function signingKeys(jwksUri: string, refresh: boolean): Promise<Jwk[]> {
  * computed by someone who saw the state in a URL, because the key never
  * leaves the server. The state is itself signed and short-lived, so the
  * binding expires with it.
+ *
+ * What this does not do is bind the login to the browser that started it:
+ * whoever captures an unredeemed `code` together with its `state` can still
+ * finish the exchange, exactly as on the GitHub and Google legs. It stops a
+ * code being redeemed under another login's state, not code injection by
+ * someone holding both values; that would need a browser-bound secret (a
+ * cookie), which none of the legs keeps.
+ *
+ * Every replica must therefore share MCP_REQUEST_STATE_KEY: with the
+ * per-process fallback key, a callback served by another pod derives another
+ * verifier and the issuer answers `invalid_grant`.
  */
 function oidcBinding(state: string): { verifier: string; challenge: string; nonce: string } {
   const verifier = b64url(createHmac('sha256', stateKey()).update(`pkce\0${state}`).digest());
@@ -805,25 +837,28 @@ export async function verifyIdToken(
         (key.alg === undefined || key.alg === 'RS256') &&
         (header.kid === undefined || key.kid === header.kid),
     );
-  let candidates = pick(await signingKeys(jwksUri, false));
-  // An unknown kid most likely means the issuer rotated its keys since we
-  // cached them: look once more before giving up.
-  if (candidates.length === 0) candidates = pick(await signingKeys(jwksUri, true));
-
   const signed = Buffer.from(`${encodedHeader}.${encodedPayload}`, 'utf8');
   const signature = Buffer.from(encodedSignature, 'base64url');
-  const valid = candidates.some((jwk) => {
-    try {
-      return verifySignature(
-        'RSA-SHA256',
-        signed,
-        createPublicKey({ key: jwk as never, format: 'jwk' }),
-        signature,
-      );
-    } catch {
-      return false;
-    }
-  });
+  const verifiedBy = (keys: Jwk[]): boolean =>
+    pick(keys).some((jwk) => {
+      try {
+        return verifySignature(
+          'RSA-SHA256',
+          signed,
+          createPublicKey({ key: jwk as never, format: 'jwk' }),
+          signature,
+        );
+      } catch {
+        return false;
+      }
+    });
+  const cached = await signingKeys(jwksUri, false);
+  let valid = verifiedBy(cached.keys);
+  // A token the cached keys do not verify (an unknown kid, or no kid at all
+  // and a rotated key) most likely means the issuer rotated its keys since
+  // we cached them: look once more before giving up, unless those keys were
+  // fetched just now.
+  if (!valid && !cached.fresh) valid = verifiedBy((await signingKeys(jwksUri, true)).keys);
   if (!valid) throw new IdentityError('The ID token signature did not verify.');
 
   const now = Math.floor(Date.now() / 1000);

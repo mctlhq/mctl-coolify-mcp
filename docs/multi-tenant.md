@@ -75,6 +75,13 @@ You need:
     at this server's `/auth/zitadel/start`, which fetches discovery only when
     clicked (rate-limited per IP), so an unreachable issuer shows an error
     for ZITADEL alone and never blocks the GitHub or Google buttons.
+    The client is authenticated per RFC 6749 §2.3.1, which form-encodes the
+    client id and secret inside the Basic header; ZITADEL decodes them (its
+    client ids contain `@`), but an issuer that does not would answer
+    `invalid_client` for such an id. The PKCE verifier and nonce are derived
+    from `MCP_REQUEST_STATE_KEY`, so with more than one replica that key
+    must be set and shared, or a callback reaching another pod fails with
+    `invalid_grant`.
 
   Configuring more than one is not required: a deployment with only one set
   of credentials behaves exactly as if the others did not exist, and
