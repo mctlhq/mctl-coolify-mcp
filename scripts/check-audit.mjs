@@ -25,7 +25,8 @@ export const ALLOWED = {
   // braces: stack exhaustion on deeply nested patterns. Affects every release
   // (`*`), so no update clears it. Reached only through markdownlint-cli2 and
   // shx, which glob paths written in this repository, not untrusted input.
-  // Remove when braces ships a fix or both tools are gone.
+  // Remove when braces ships a fix or both tools are gone:
+  // https://github.com/mctlhq/mctl-coolify-mcp/issues/14
   'GHSA-vfj7-8cjw-p6xm': 'braces: no fixed release exists',
 };
 
@@ -91,11 +92,11 @@ export function evaluateAudit(report, { allowed = ALLOWED, threshold = THRESHOLD
 
 // `npm audit` exits 1 when it finds anything, so the exit code alone says
 // nothing; the report on stdout is what counts.
-function runNpmAudit() {
+export function runNpmAudit(command = 'npm', args = ['audit', '--json']) {
   return new Promise((done, fail) => {
     execFile(
-      'npm',
-      ['audit', '--json'],
+      command,
+      args,
       { maxBuffer: 64 * 1024 * 1024, shell: process.platform === 'win32' },
       (err, stdout) => {
         if (err && typeof err.code !== 'number') return fail(err);

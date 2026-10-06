@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { ALLOWED, evaluateAudit, main } from '../check-audit.mjs';
+import { ALLOWED, evaluateAudit, main, runNpmAudit } from '../check-audit.mjs';
 
 const advisory = (ghsa: string, severity = 'high', title = 'something bad') => ({
   source: 1,
@@ -126,5 +126,33 @@ describe('main', () => {
     const { log, lines } = silent();
     expect(await main({ audit: async () => report({}), log })).toBe(0);
     expect(lines.join('\n')).toMatch(/::warning.*GHSA-vfj7-8cjw-p6xm is allowed but no longer/);
+  });
+});
+
+// The real runner, pointed at `node` standing in for `npm`.
+describe('runNpmAudit', () => {
+  const node = (script: string) => runNpmAudit(process.execPath, ['-e', script]);
+
+  it('reads the report even though a report with findings exits 1', async () => {
+    const script = `console.log(JSON.stringify({ auditReportVersion: 2 })); process.exit(1)`;
+    await expect(node(script)).resolves.toEqual({ auditReportVersion: 2 });
+  });
+
+  it.each([
+    ['output that is not JSON', `console.log('npm error code ENOTFOUND'); process.exit(1)`],
+    ['a truncated report', `console.log('{"auditReportVersion": 2, "vulnera')`],
+    ['no output at all', `process.exit(0)`],
+  ])('rejects %s', async (_name, script) => {
+    await expect(node(script)).rejects.toThrow(/did not print JSON/);
+  });
+
+  it('rejects when the command cannot be started', async () => {
+    await expect(runNpmAudit('/nonexistent/npm', [])).rejects.toThrow();
+  });
+
+  it('makes the gate exit 2 on unparseable output', async () => {
+    const { log, lines } = silent();
+    expect(await main({ audit: () => node(`console.log('<html>502</html>')`), log })).toBe(2);
+    expect(lines.join('\n')).toContain('could not read the audit');
   });
 });
