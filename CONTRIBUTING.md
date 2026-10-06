@@ -55,7 +55,7 @@ The `main` branch is protected:
 
 Every PR runs:
 
-1. **Security audit** - `npm audit --omit=dev` gates; the full `npm audit`, dev tooling included, is reported only
+1. **Security audit** - `npm run check:audit`: `npm audit` at high or above over the whole tree, dev tooling included, minus the advisories listed with a reason in `scripts/check-audit.mjs` (today only `GHSA-vfj7-8cjw-p6xm`, `braces`, which has no fixed release)
 2. **Format check** - Prettier
 3. **Lint** - ESLint
 4. **Build** - TypeScript compilation

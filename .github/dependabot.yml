@@ -1,8 +1,8 @@
 version: 2
 updates:
   # npm dependencies. evals/ has its own lockfile and exact pins and is not
-  # covered by the root `npm audit` in ci.yml, so without this entry it drifted
-  # to 25 advisories before anyone noticed (#9). Its PRs are NOT auto-merged
+  # covered by the root audit (`npm run check:audit`) in ci.yml, so without
+  # this entry it drifted to 25 advisories before anyone noticed (#9). Its PRs are NOT auto-merged
   # (see dependabot-auto-merge.yml): CI on them is static checks only.
   - package-ecosystem: 'npm'
     directories:
