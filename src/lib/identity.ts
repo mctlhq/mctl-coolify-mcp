@@ -44,7 +44,9 @@
  *
  * ## ZITADEL, the third provider
  *
- * ZITADEL (any standard OIDC issuer, really) is the one provider whose host is
+ * ZITADEL (or another OIDC issuer shaped like it: RS256 ID tokens, an `iss`
+ * without a trailing slash, RFC 6749 §2.3.1 client authentication and
+ * `prompt=select_account`) is the one provider whose host is
  * configuration rather than a constant, so it is the one place this module
  * does full OIDC: endpoints come from the issuer's discovery document, the
  * code flow carries PKCE, and the ID token's signature, `iss`, `aud`/`azp`,
@@ -119,7 +121,7 @@ export interface VerifiedIdentity {
   provider: Provider;
   /** The provider's immutable id, as a string. Never the login/email. */
   sub: string;
-  /** Current login (GitHub) or email (Google, ZITADEL), display/audit only — never a key. */
+  /** Current login (GitHub) or email (Google; ZITADEL when verified), display/audit only — never a key. */
   login: string;
 }
 
@@ -783,8 +785,11 @@ async function exchangeZitadel(
   }
 
   const claims = await verifyIdToken(token.id_token, creds, jwksUri, nonce);
+  // Display only, never a key. An address the issuer has not verified is one
+  // its holder typed in, so it is not shown as theirs on /enroll or in the
+  // audit log: the token must say `email_verified: true` in so many words.
   const login =
-    typeof claims.email === 'string' && claims.email !== ''
+    claims.email_verified === true && typeof claims.email === 'string' && claims.email !== ''
       ? claims.email
       : typeof claims.preferred_username === 'string' && claims.preferred_username !== ''
         ? claims.preferred_username

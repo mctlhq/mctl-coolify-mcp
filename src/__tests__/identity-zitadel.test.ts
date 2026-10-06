@@ -252,6 +252,23 @@ describe('ZITADEL code exchange', () => {
     });
   });
 
+  it('does not display an e-mail the issuer has not verified', async () => {
+    // Unverified, or not said to be verified: the address is one its holder
+    // typed in, so the enrol page and the audit log show the sub instead.
+    for (const emailVerified of [false, undefined, 'true', 1]) {
+      await expect(
+        login({ sub: '9', email: 'victim@example.com', claims: { email_verified: emailVerified } }),
+      ).resolves.toEqual({ provider: 'zitadel', sub: '9', login: '9' });
+    }
+    await expect(
+      login({
+        sub: '9',
+        email: 'victim@example.com',
+        claims: { email_verified: false, preferred_username: 'zuser' },
+      }),
+    ).resolves.toEqual({ provider: 'zitadel', sub: '9', login: 'zuser' });
+  });
+
   it('does not carry any token out of the module', async () => {
     const identity = await login({ sub: '1', email: 'a@example.com' });
     expect(JSON.stringify(identity)).not.toContain('zitadel-access');

@@ -382,6 +382,44 @@ describe('ZITADEL as the identity provider', () => {
   });
 });
 
+describe('ZITADEL not configured', () => {
+  it('offers no button, serves no start route and refuses the callback, without any fetch', async () => {
+    clearOidcCache();
+    const fetchSpy = jest.fn(async (input: unknown) => {
+      throw new Error(`unexpected fetch in test: ${String(input)}`);
+    });
+    global.fetch = fetchSpy as unknown as typeof fetch;
+    const { app } = makeApp({ identity: bothProvidersIdentity });
+
+    // The chooser is the GitHub + Google one, as before ZITADEL existed.
+    const enroll = await app.fetch(new Request(`${ISSUER}/enroll`));
+    expect(enroll.status).toBe(200);
+    const chooserHtml = await enroll.text();
+    expect(chooserHtml).toContain('Continue with GitHub');
+    expect(chooserHtml).toContain('Continue with Google');
+    expect(chooserHtml).not.toMatch(/zitadel/i);
+    expect(chooserHtml.match(/class="provider"/g)).toHaveLength(2);
+
+    // A state this server really sealed, so a refusal below is about the
+    // provider being off and not about the state.
+    const state = new URL(
+      /href="([^"]*)">Continue with GitHub/.exec(chooserHtml)![1].replace(/&amp;/g, '&'),
+    ).searchParams.get('state')!;
+
+    const start = await app.fetch(
+      new Request(`${ISSUER}/auth/zitadel/start?${new URLSearchParams({ state })}`),
+    );
+    expect(start.status).toBe(404);
+
+    const callback = await app.fetch(
+      new Request(`${ISSUER}/auth/zitadel/callback?${new URLSearchParams({ code: 'c', state })}`),
+    );
+    expect(callback.status).toBe(400);
+    expect(await callback.text()).toContain('zitadel login is not configured');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('ZITADEL discovery failing', () => {
   const zitadelOnly = (issuer: FakeOidcIssuer): Record<string, unknown> => ({
     issuer: ZITADEL_ISSUER,

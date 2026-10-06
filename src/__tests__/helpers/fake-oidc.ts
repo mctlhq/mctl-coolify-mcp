@@ -152,7 +152,8 @@ export class FakeOidcIssuer {
           exp: now + 3600,
           iat: now,
           nonce: pending.nonce,
-          ...(pending.email !== undefined && { email: pending.email }),
+          // As ZITADEL does for a verified address; `claims` can override it.
+          ...(pending.email !== undefined && { email: pending.email, email_verified: true }),
           ...pending.claims,
         },
       );

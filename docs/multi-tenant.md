@@ -30,11 +30,11 @@ person.
 
 |                                    | Single-tenant (`MCP_TENANCY=single`, the default)         | Multi-tenant (`MCP_TENANCY=multi`)                                                           |
 | ---------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Who the OAuth flow authenticates   | Whoever can prove they hold the container's Coolify token | Whoever can sign in with GitHub and/or Google (whichever the deployment configures)          |
+| Who the OAuth flow authenticates   | Whoever can prove they hold the container's Coolify token | Whoever can sign in with GitHub, Google and/or ZITADEL (whichever the deployment configures) |
 | Whose Coolify a tool call reaches  | The one in `COOLIFY_BASE_URL` / `COOLIFY_INSTANCES`       | Whichever the signed-in caller enrolled                                                      |
 | Where the Coolify credential lives | Container environment                                     | Vault, keyed by the caller, entered once through `/enroll`                                   |
-| `/authorize`                       | Asks for a Coolify token                                  | Redirects to the identity provider (or shows a chooser if both are configured)               |
-| New routes                         | —                                                         | `/enroll`, `/auth/{github,google,zitadel}/callback`, `/enroll/revoke`                        |
+| `/authorize`                       | Asks for a Coolify token                                  | Redirects to the identity provider (or shows a chooser if several are configured)            |
+| New routes                         | —                                                         | `/enroll`, `/auth/{github,google,zitadel}/callback`, `/auth/zitadel/start`, `/enroll/revoke` |
 | OAuth state persistence            | A file on a mounted volume (`MCP_OAUTH_STATE_FILE`)       | The same file, but under `/tmp`, mirrored to Vault so it survives a restart without a volume |
 
 Everything else — the 45 tools, PKCE, CIMD/DCR client registration, the
@@ -69,8 +69,11 @@ You need:
     discovery document, the flow uses PKCE (S256), and the ID token's
     signature, `iss`, `aud`/`azp`, expiry and `nonce` are verified before its
     `sub` is used. Requests `openid email`; turn on "user info inside ID
-    token" for the application so the address can be displayed (the `sub` is
-    shown otherwise). Setting only some of the three variables, or a
+    token" for the application so the address can be displayed. Only an
+    address the token marks `email_verified: true` is displayed; otherwise
+    the `sub` is shown. The authorization request carries
+    `prompt=select_account`, which ZITADEL honours; an issuer that rejects
+    that value instead of ignoring it cannot be used. Setting only some of the three variables, or a
     non-https issuer, refuses to start. The chooser's ZITADEL button points
     at this server's `/auth/zitadel/start`, which fetches discovery only when
     clicked (rate-limited per IP), so an unreachable issuer shows an error
