@@ -26,7 +26,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The gate is on what ships: `dependencies`, the tree `npm ci --omit=dev`
+      # installs into the image and the published package.
       - name: Security audit
+        run: npm audit --omit=dev --audit-level=high
+
+      # Dev tooling is reported and does not gate. GHSA-vfj7-8cjw-p6xm covers
+      # every release of `braces`, reached only through markdownlint-cli2 and
+      # shx, so no update can clear it and a gate on it stays red on every
+      # pull request whatever the pull request changes.
+      - name: Security audit, dev dependencies (report only)
+        continue-on-error: true
         run: npm audit --audit-level=high
 
       - name: Format check

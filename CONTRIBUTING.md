@@ -55,7 +55,7 @@ The `main` branch is protected:
 
 Every PR runs:
 
-1. **Security audit** - `npm audit`
+1. **Security audit** - `npm audit --omit=dev` gates; the full `npm audit`, dev tooling included, is reported only
 2. **Format check** - Prettier
 3. **Lint** - ESLint
 4. **Build** - TypeScript compilation
