@@ -32,6 +32,7 @@
     "lint:fix": "eslint . --fix",
     "sync:tokens": "node scripts/sync-tokens.mjs",
     "check:tokens": "node scripts/sync-tokens.mjs --check",
+    "check:audit": "node scripts/check-audit.mjs",
     "check:spec-drift": "node scripts/check-client-spec-drift.mjs",
     "build:chunks": "node scripts/split-openapi-chunks.mjs",
     "check:chunk-drift": "node scripts/split-openapi-chunks.mjs --check",
@@ -81,7 +82,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.2.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.0.0",
     "@typescript-eslint/eslint-plugin": "^8.51.0",
