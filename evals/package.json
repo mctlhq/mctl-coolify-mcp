@@ -23,7 +23,7 @@
   "type": "module",
   "devDependencies": {
     "@ai-sdk/anthropic": "3.0.127",
-    "@ai-sdk/google": "3.0.130",
+    "@ai-sdk/google": "4.0.87",
     "@ai-sdk/openai": "3.0.123",
     "@eslint/js": "10.0.1",
     "@modelcontextprotocol/sdk": "1.31.0",
