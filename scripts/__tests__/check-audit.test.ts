@@ -78,6 +78,11 @@ describe('evaluateAudit', () => {
     expect(evaluateAudit(report(bracesChain)).unused).toEqual([]);
   });
 
+  it('names an allowed advisory that dropped below the threshold', () => {
+    const r = report({ braces: { via: [advisory(BRACES, 'moderate')] } });
+    expect(evaluateAudit(r)).toEqual({ blocking: [], unused: [BRACES] });
+  });
+
   it.each([
     ['null', null],
     ['an array', []],
@@ -122,6 +127,12 @@ describe('main', () => {
     expect(await main({ audit: async () => ({ error: { code: 'E500' } }), log })).toBe(2);
   });
 
+  it('describes an npm error that has neither summary nor code', async () => {
+    const { log, lines } = silent();
+    expect(await main({ audit: async () => ({ error: { detail: 'boom' } }), log })).toBe(2);
+    expect(lines.join('\n')).toContain('"detail":"boom"');
+  });
+
   it('warns, without failing, when an allowed advisory is gone', async () => {
     const { log, lines } = silent();
     expect(await main({ audit: async () => report({}), log })).toBe(0);
@@ -145,6 +156,11 @@ describe('runNpmAudit', () => {
   ])('rejects %s', async (_name, script) => {
     await expect(node(script)).rejects.toThrow(/did not print JSON/);
   });
+
+  it('rejects an audit that runs past the timeout', async () => {
+    const hang = runNpmAudit(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], 500);
+    await expect(hang).rejects.toThrow();
+  }, 10_000);
 
   it('rejects when the command cannot be started', async () => {
     await expect(runNpmAudit('/nonexistent/npm', [])).rejects.toThrow();

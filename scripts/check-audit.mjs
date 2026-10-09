@@ -42,7 +42,8 @@ export function evaluateAudit(report, { allowed = ALLOWED, threshold = THRESHOLD
     throw new Error('audit report is not an object');
   }
   if (report.error) {
-    throw new Error(`npm audit reported an error: ${report.error.summary ?? report.error.code}`);
+    const why = report.error.summary ?? report.error.code ?? JSON.stringify(report.error);
+    throw new Error(`npm audit reported an error: ${why}`);
   }
   if (report.auditReportVersion !== 2) {
     throw new Error(`unsupported auditReportVersion: ${report.auditReportVersion}`);
@@ -69,9 +70,11 @@ export function evaluateAudit(report, { allowed = ALLOWED, threshold = THRESHOLD
       if (level < 0) {
         throw new Error(`advisory on ${name} has an unknown severity: ${via?.severity}`);
       }
-      const id = ghsaOf(via.url);
-      if (id) seen.add(id);
       if (level < min) continue;
+      const id = ghsaOf(via.url);
+      // Seen only at or above the threshold: an allowed advisory downgraded
+      // below it no longer needs the exemption, so it is reported as unused.
+      if (id) seen.add(id);
       // An advisory with no recognisable id cannot be on the allowlist.
       if (id && Object.hasOwn(allowed, id)) continue;
       const key = id ?? `${name}:${via.source ?? via.title}`;
@@ -91,13 +94,17 @@ export function evaluateAudit(report, { allowed = ALLOWED, threshold = THRESHOLD
 }
 
 // `npm audit` exits 1 when it finds anything, so the exit code alone says
-// nothing; the report on stdout is what counts.
-export function runNpmAudit(command = 'npm', args = ['audit', '--json']) {
+// nothing; the report on stdout is what counts. The timeout keeps a stalled
+// registry connection from holding the job until its own limit: a killed
+// process has no numeric exit code, so it fails like any unreadable audit.
+export const AUDIT_TIMEOUT_MS = 5 * 60_000;
+
+export function runNpmAudit(command = 'npm', args = ['audit', '--json'], timeout = AUDIT_TIMEOUT_MS) {
   return new Promise((done, fail) => {
     execFile(
       command,
       args,
-      { maxBuffer: 64 * 1024 * 1024, shell: process.platform === 'win32' },
+      { maxBuffer: 64 * 1024 * 1024, shell: process.platform === 'win32', timeout },
       (err, stdout) => {
         if (err && typeof err.code !== 'number') return fail(err);
         try {
