@@ -24,7 +24,7 @@
   "devDependencies": {
     "@ai-sdk/anthropic": "3.0.127",
     "@ai-sdk/google": "3.0.130",
-    "@ai-sdk/openai": "3.0.123",
+    "@ai-sdk/openai": "4.0.83",
     "@eslint/js": "10.0.1",
     "@modelcontextprotocol/sdk": "1.31.0",
     "@types/node": "26.1.2",
