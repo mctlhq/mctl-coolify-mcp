@@ -99,7 +99,11 @@ export function evaluateAudit(report, { allowed = ALLOWED, threshold = THRESHOLD
 // process has no numeric exit code, so it fails like any unreadable audit.
 export const AUDIT_TIMEOUT_MS = 5 * 60_000;
 
-export function runNpmAudit(command = 'npm', args = ['audit', '--json'], timeout = AUDIT_TIMEOUT_MS) {
+export function runNpmAudit(
+  command = 'npm',
+  args = ['audit', '--json'],
+  timeout = AUDIT_TIMEOUT_MS,
+) {
   return new Promise((done, fail) => {
     execFile(
       command,
