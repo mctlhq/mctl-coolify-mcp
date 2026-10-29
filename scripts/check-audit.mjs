@@ -21,14 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 // Each entry needs the reason it cannot be fixed and what removes it.
-export const ALLOWED = {
-  // braces: stack exhaustion on deeply nested patterns. Affects every release
-  // (`*`), so no update clears it. Reached only through markdownlint-cli2 and
-  // shx, which glob paths written in this repository, not untrusted input.
-  // Remove when braces ships a fix or both tools are gone:
-  // https://github.com/mctlhq/mctl-coolify-mcp/issues/14
-  'GHSA-vfj7-8cjw-p6xm': 'braces: no fixed release exists',
-};
+export const ALLOWED = {};
 
 const LEVELS = ['info', 'low', 'moderate', 'high', 'critical'];
 export const THRESHOLD = 'high';
@@ -121,10 +114,10 @@ export function runNpmAudit(
   });
 }
 
-export async function main({ audit = runNpmAudit, log = console } = {}) {
+export async function main({ audit = runNpmAudit, log = console, allowed = ALLOWED } = {}) {
   let result;
   try {
-    result = evaluateAudit(await audit());
+    result = evaluateAudit(await audit(), { allowed });
   } catch (e) {
     log.error(`check-audit: could not read the audit: ${e.message}`);
     return 2;
@@ -135,9 +128,9 @@ export async function main({ audit = runNpmAudit, log = console } = {}) {
     );
   }
   if (result.blocking.length === 0) {
-    log.log(
-      `check-audit: no advisory at ${THRESHOLD} or above outside the allowlist (${Object.keys(ALLOWED).join(', ')})`,
-    );
+    const keys = Object.keys(allowed);
+    const suffix = keys.length ? ` outside the allowlist (${keys.join(', ')})` : '';
+    log.log(`check-audit: no advisory at ${THRESHOLD} or above${suffix}`);
     return 0;
   }
   for (const a of result.blocking) {

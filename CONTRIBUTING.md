@@ -55,7 +55,7 @@ The `main` branch is protected:
 
 Every PR runs:
 
-1. **Security audit** - `npm run check:audit`: `npm audit` at high or above over the whole tree, dev tooling included, minus the advisories listed with a reason in `scripts/check-audit.mjs` (today only `GHSA-vfj7-8cjw-p6xm`, `braces`, which has no fixed release; the entry is removed when `braces` ships a fix or `shx` and `markdownlint-cli2` are replaced, tracked in [#14](https://github.com/mctlhq/mctl-coolify-mcp/issues/14)). An audit that cannot be read fails the check
+1. **Security audit** - `npm run check:audit`: `npm audit` at high or above over the whole tree, dev tooling included, minus the advisories listed with a reason in `scripts/check-audit.mjs`. The allowlist is empty today (the `braces` entry, `GHSA-vfj7-8cjw-p6xm`, went when GitHub withdrew the advisory on 2026-10-23; see [#14](https://github.com/mctlhq/mctl-coolify-mcp/issues/14)); a new entry needs the reason it cannot be fixed and what removes it. The same rule covers `overrides` in `package.json` that exist only to clear an advisory: `re2js: ^2.8.7` lifts the exact `2.8.6` pin in `markdownlint` past GHSA-gg6h-894w-4m9c, and goes when `markdownlint` depends on `re2js` >= 2.8.7 itself. An audit that cannot be read fails the check
 2. **Format check** - Prettier
 3. **Lint** - ESLint
 4. **Build** - TypeScript compilation

@@ -17,8 +17,12 @@ const report = (vulnerabilities: Record<string, unknown>) => ({
 const BRACES = 'GHSA-vfj7-8cjw-p6xm';
 const OTHER = 'GHSA-6qxp-vccf-f47h';
 
-// The shape `npm audit --json` prints for this repository: the braces advisory
-// and the chain of dev tools that depend on it.
+// An allowlist with one entry, the shape ALLOWED had while the braces advisory
+// (withdrawn by GitHub on 2026-10-23) was still reported.
+const allowBraces = { [BRACES]: 'braces: no fixed release exists' };
+
+// The shape `npm audit --json` printed for this repository while the braces
+// advisory was live: that advisory and the chain of dev tools depending on it.
 const bracesChain = {
   braces: { severity: 'high', via: [advisory(BRACES)] },
   micromatch: { severity: 'high', via: ['braces'] },
@@ -38,16 +42,23 @@ describe('evaluateAudit', () => {
   });
 
   it('passes the allowed advisory and everything that only depends on it', () => {
-    expect(evaluateAudit(report(bracesChain)).blocking).toEqual([]);
+    expect(evaluateAudit(report(bracesChain), { allowed: allowBraces }).blocking).toEqual([]);
   });
 
-  it('allows exactly the braces advisory by default', () => {
-    expect(Object.keys(ALLOWED)).toEqual([BRACES]);
+  it('allows nothing by default', () => {
+    expect(Object.keys(ALLOWED)).toEqual([]);
+  });
+
+  it('blocks the braces chain once nothing is allowed', () => {
+    expect(evaluateAudit(report(bracesChain)).blocking).toEqual([
+      expect.objectContaining({ id: BRACES, package: 'braces' }),
+    ]);
   });
 
   it('blocks a high advisory that is not allowed, dev dependency or not', () => {
     const { blocking } = evaluateAudit(
       report({ ...bracesChain, '@modelcontextprotocol/client': { via: [advisory(OTHER)] } }),
+      { allowed: allowBraces },
     );
     expect(blocking).toEqual([
       expect.objectContaining({ id: OTHER, package: '@modelcontextprotocol/client' }),
@@ -57,6 +68,7 @@ describe('evaluateAudit', () => {
   it('blocks a second advisory on the allowed package', () => {
     const { blocking } = evaluateAudit(
       report({ braces: { via: [advisory(BRACES), advisory(OTHER, 'critical')] } }),
+      { allowed: allowBraces },
     );
     expect(blocking.map((b) => b.id)).toEqual([OTHER]);
   });
@@ -74,13 +86,13 @@ describe('evaluateAudit', () => {
   });
 
   it('names an allowed advisory that is no longer reported', () => {
-    expect(evaluateAudit(report({})).unused).toEqual([BRACES]);
-    expect(evaluateAudit(report(bracesChain)).unused).toEqual([]);
+    expect(evaluateAudit(report({}), { allowed: allowBraces }).unused).toEqual([BRACES]);
+    expect(evaluateAudit(report(bracesChain), { allowed: allowBraces }).unused).toEqual([]);
   });
 
   it('names an allowed advisory that dropped below the threshold', () => {
     const r = report({ braces: { via: [advisory(BRACES, 'moderate')] } });
-    expect(evaluateAudit(r)).toEqual({ blocking: [], unused: [BRACES] });
+    expect(evaluateAudit(r, { allowed: allowBraces })).toEqual({ blocking: [], unused: [BRACES] });
   });
 
   it.each([
@@ -104,13 +116,31 @@ describe('evaluateAudit', () => {
 describe('main', () => {
   it('exits 0 when only the allowed advisory is present', async () => {
     const { log } = silent();
-    expect(await main({ audit: async () => report(bracesChain), log })).toBe(0);
+    expect(await main({ audit: async () => report(bracesChain), log, allowed: allowBraces })).toBe(
+      0,
+    );
+  });
+
+  it('exits 0 on a clean report with the default, empty allowlist and says so', async () => {
+    const { log, lines } = silent();
+    expect(await main({ audit: async () => report({}), log })).toBe(0);
+    expect(lines).toEqual(['check-audit: no advisory at high or above']);
+  });
+
+  it('names the allowlist in the success line when one is in force', async () => {
+    const { log, lines } = silent();
+    expect(await main({ audit: async () => report(bracesChain), log, allowed: allowBraces })).toBe(
+      0,
+    );
+    expect(lines).toEqual([
+      `check-audit: no advisory at high or above outside the allowlist (${BRACES})`,
+    ]);
   });
 
   it('exits 1 and names the advisory when another one is present', async () => {
     const { log, lines } = silent();
     const audit = async () => report({ ...bracesChain, pkg: { via: [advisory(OTHER)] } });
-    expect(await main({ audit, log })).toBe(1);
+    expect(await main({ audit, log, allowed: allowBraces })).toBe(1);
     expect(lines.join('\n')).toContain(OTHER);
   });
 
@@ -135,7 +165,7 @@ describe('main', () => {
 
   it('warns, without failing, when an allowed advisory is gone', async () => {
     const { log, lines } = silent();
-    expect(await main({ audit: async () => report({}), log })).toBe(0);
+    expect(await main({ audit: async () => report({}), log, allowed: allowBraces })).toBe(0);
     expect(lines.join('\n')).toMatch(/::warning.*GHSA-vfj7-8cjw-p6xm is allowed but no longer/);
   });
 });
