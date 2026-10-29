@@ -121,6 +121,22 @@ describe('main', () => {
     );
   });
 
+  it('exits 0 on a clean report with the default, empty allowlist and says so', async () => {
+    const { log, lines } = silent();
+    expect(await main({ audit: async () => report({}), log })).toBe(0);
+    expect(lines).toEqual(['check-audit: no advisory at high or above']);
+  });
+
+  it('names the allowlist in the success line when one is in force', async () => {
+    const { log, lines } = silent();
+    expect(await main({ audit: async () => report(bracesChain), log, allowed: allowBraces })).toBe(
+      0,
+    );
+    expect(lines).toEqual([
+      `check-audit: no advisory at high or above outside the allowlist (${BRACES})`,
+    ]);
+  });
+
   it('exits 1 and names the advisory when another one is present', async () => {
     const { log, lines } = silent();
     const audit = async () => report({ ...bracesChain, pkg: { via: [advisory(OTHER)] } });

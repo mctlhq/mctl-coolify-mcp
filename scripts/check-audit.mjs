@@ -128,9 +128,9 @@ export async function main({ audit = runNpmAudit, log = console, allowed = ALLOW
     );
   }
   if (result.blocking.length === 0) {
-    log.log(
-      `check-audit: no advisory at ${THRESHOLD} or above outside the allowlist (${Object.keys(allowed).join(', ')})`,
-    );
+    const keys = Object.keys(allowed);
+    const suffix = keys.length ? ` outside the allowlist (${keys.join(', ')})` : '';
+    log.log(`check-audit: no advisory at ${THRESHOLD} or above${suffix}`);
     return 0;
   }
   for (const a of result.blocking) {
