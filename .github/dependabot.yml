@@ -34,6 +34,15 @@ updates:
     ignore:
       - dependency-name: 'typescript'
         update-types: ['version-update:semver-major']
+      # evals toolchain majors move together: ai 7 is blocked by the
+      # @vitest-evals/harness-ai-sdk peer range, @ai-sdk/* v4 needs ai 7,
+      # and vitest 5 fails npm ci (edgesOut). Revisit as one manual upgrade.
+      - dependency-name: 'ai'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@ai-sdk/*'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'vitest'
+        update-types: ['version-update:semver-major']
     commit-message:
       prefix: 'chore(deps)'
     labels:
