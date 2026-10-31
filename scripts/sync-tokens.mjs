@@ -23,7 +23,7 @@
  * something that happens to this page four hours after an unrelated merge on
  * another repository (mctlhq/mctl-design#75, #76).
  *
- * `@mctlhq/css@0.5.0` on GitHub Packages carries the same sheet and would also
+ * `@mctlhq/css@0.19.0` on GitHub Packages carries the same sheet and would also
  * be pinnable. It is not used because consuming it needs a GitHub Packages
  * token in this repository's CI and in the container build, which is
  * centralised in mctl-gitops and has no npm credentials. The pinned URL buys
@@ -36,7 +36,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const SOURCE = 'https://ui.mctl.ai/0.5.0/mctl.css';
+const SOURCE = 'https://ui.mctl.ai/0.19.0/mctl.css';
 const OUTPUT = fileURLToPath(new URL('../public/assets/tokens.css', import.meta.url));
 
 /**
@@ -59,6 +59,9 @@ function systemPreferenceBlock(themeCss) {
     .split(';')
     .map((line) => line.trim())
     .filter(Boolean)
+    // 0.19.0's light rule carries its own color-scheme; the block below
+    // already sets it, so drop the duplicate rather than emit it twice.
+    .filter((line) => !line.startsWith('color-scheme'))
     .map((line) => `    ${line};`)
     .join('\n');
   return `

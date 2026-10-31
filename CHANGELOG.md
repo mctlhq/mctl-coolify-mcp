@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Landing, terms and privacy pages track the MCTL design system 0.19.0.** `public/assets/tokens.css` is re-vendored from the pinned `https://ui.mctl.ai/0.19.0/mctl.css` (was 0.5.0). Every token the pages read is still defined there, so nothing was renamed. The derived system-light block no longer repeats `color-scheme`, and the vendored file is excluded from prettier like the other byte-identical artifacts, since `check:tokens` already pins its exact bytes.
 - **ChatGPT can connect over a Client ID Metadata Document.** Its document (`https://chatgpt.com/oauth/client.json`) prefers `token_endpoint_auth_method: "private_key_jwt"` but lists `["none", "private_key_jwt"]` as supported, and ChatGPT picks from the intersection with what the server advertises, which is `none`. The check read only the singular preference, so `/authorize` refused ChatGPT with "may only use token_endpoint_auth_method \"none\"". A document is now accepted when `none` is among its supported methods, and still refused when it is not. A refused document is also logged, with its host and the reason; before, a rejection left no trace on the server.
 
 ### Added
