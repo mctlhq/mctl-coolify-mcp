@@ -51,9 +51,16 @@ const OUTPUT = fileURLToPath(new URL('../public/assets/tokens.css', import.meta.
  * light theme of empty values.
  */
 function systemPreferenceBlock(themeCss) {
-  const match = themeCss.match(/\[data-theme=['"]light['"]\]\s*\{([^}]*)\}/);
+  // Comments are stripped first: from 0.19.0 the light rule carries them, and
+  // a `;` or `}` inside one would otherwise split a declaration or end the
+  // match early, silently truncating the derived palette.
+  const uncommented = themeCss.replace(/\/\*[\s\S]*?\*\//g, '');
+  const match = uncommented.match(/\[data-theme=['"]light['"]\]\s*\{([^}]*)\}/);
   if (!match) {
     throw new Error("no [data-theme='light'] rule in theme.css — the package layout changed");
+  }
+  if (!/--surface-bg\s*:/.test(match[1])) {
+    throw new Error("[data-theme='light'] does not set --surface-bg — the package layout changed");
   }
   const declarations = match[1]
     .split(';')

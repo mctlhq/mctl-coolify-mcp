@@ -809,8 +809,7 @@
     --status-ok: var(--mctl-status-light-ok);
     --status-warn: var(--mctl-status-light-warn);
     --status-bad: var(--mctl-status-light-bad);
-    /* Status as text on a tint of itself (filled pills). */
-  --status-ok-text: var(--mctl-status-text-light-ok);
+    --status-ok-text: var(--mctl-status-text-light-ok);
     --status-warn-text: var(--mctl-status-text-light-warn);
     --status-bad-text: var(--mctl-status-text-light-bad);
     --syntax-key: var(--mctl-syntax-light-key);
