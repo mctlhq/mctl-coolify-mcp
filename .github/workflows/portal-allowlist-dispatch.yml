@@ -27,27 +27,29 @@ jobs:
   dispatch:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # Main-only; holds DISPATCH_APP_PRIVATE_KEY (mctlhq/mctl-gitops#1033).
+    environment: app-dispatch
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
 
-      # The mctl-agents App, as this org's release workflows use to dispatch
-      # into mctl-gitops (mctlhq/mctl-gitops#761): actions:write there and
-      # nothing else. It cannot push to mctl-gitops; the vendor workflow
-      # there mints its own token to open the PR.
       # push: main also covers an admin push that skipped the PR gate, so
       # the file is checked against the roster again before it leaves.
       - name: Check the allowlist before publishing it
         run: node scripts/check-portal-allowlist.mjs
 
+      # The mctl-gitops-dispatch App: actions:write + metadata:read, installed
+      # on mctl-gitops alone (mctlhq/mctl-gitops#1033). It cannot push to
+      # mctl-gitops; the vendor workflow there mints its own token to open the
+      # PR. Its key lives in the main-only `app-dispatch` environment.
       - name: Generate a dispatch token
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}
           owner: mctlhq
           repositories: mctl-gitops
           permission-actions: write
