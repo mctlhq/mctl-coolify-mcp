@@ -17,7 +17,7 @@
     "@astrojs/node": "^11.1.9",
     "@astrojs/sitemap": "^3.6.0",
     "@aws-sdk/client-sesv2": "^3.906.0",
-    "astro": "^7.4.4"
+    "astro": "^7.4.12"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
